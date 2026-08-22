@@ -1,0 +1,15 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+terraform.tfvars
+
+# Datos
+*.csv
+
+# Python
+__pycache__/
+*.pyc
+
+# Zips generados
+Infrastructure/consumidor.zip
