@@ -51,6 +51,7 @@ Componentes ya provisionados y probados end-to-end:
 | Esquema Cloud SQL: `clientes`, `transacciones`, `alertas` | ✅ Desplegado vía Terraform (`schema.sql`) | `\dt` en psql, integridad referencial probada con FK |
 | Registros de prueba en Cloud SQL | ✅ Insertados y validados con JOIN entre las 3 tablas | Consulta en psql |
 | Cloud Function `consumidor` (Pub/Sub → BigQuery Raw) | ✅ Desplegada vía Terraform, probada end-to-end | Mensaje de prueba publicado desde Cloud Shell y verificado en BigQuery |
+| Generador (Juanes) — `Backend/generador/` | ✅ Probado end-to-end contra el proyecto real | 268 transacciones reales publicadas (ventana 2019-02-25 22:00–00:00), 28 fraudes verificados en `raw.transacciones_raw` |
 
 ### Cómo desplegar desde cero (reproducible, sin pasos manuales)
 
@@ -80,8 +81,14 @@ documentado en [`Backend/contrato_datos_generador.md`](../Backend/contrato_datos
 
 ### Pendiente
 
-- Script generador (Juanes): publica transacciones reales a Pub/Sub respetando la cadencia
-  temporal original y el contrato de datos.
-- Prueba de carga completa end-to-end (Semana 7): mensajes/seg y latencia extremo a extremo.
+- Prueba de carga completa end-to-end con el equipo (Semana 7): mensajes/seg y latencia
+  extremo a extremo, corriendo el generador de forma sostenida.
 - Job de Spark Structured Streaming sobre Dataproc (flujo analítico y de detección).
-- Integración con Redis/Memorystore y API Nager.Date.
+- Integración con Redis/Memorystore en el flujo de enriquecimiento de Spark. La consulta a
+  Nager.Date ya está integrada y probada como módulo reutilizable (`Backend/generador/holidays.py`);
+  falta conectarla al enriquecimiento del job de Spark.
+- **Coordinar el salt de `cc_num_hash` entre el generador y la carga de `clientes` en Cloud SQL.**
+  Hoy `clientes.cc_num_hash` solo tiene un valor de prueba (`abc123hash`, no un hash real) y el
+  generador usa un salt provisional local — antes de construir el flujo transaccional que hace
+  join entre `clientes` y `transacciones` por `cc_num_hash`, el equipo debe fijar un único salt
+  y algoritmo para ambos lados, o los joins no van a coincidir.
