@@ -1,0 +1,5 @@
+streamlit==1.38.0
+google-cloud-bigquery>=3.25,<4
+google-cloud-pubsub>=2.25,<3
+pandas>=2.2,<3
+db-dtypes>=1.3,<2
