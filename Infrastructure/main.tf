@@ -74,6 +74,7 @@ resource "google_bigquery_table" "transacciones_raw" {
     { name = "merch_lat", type = "FLOAT" },
     { name = "merch_long", type = "FLOAT" },
     { name = "is_fraud", type = "INTEGER" },
+    { name = "veredicto", type = "STRING" },
     { name = "ingestion_timestamp", type = "TIMESTAMP" },
     { name = "pubsub_message_id", type = "STRING" }
   ])
