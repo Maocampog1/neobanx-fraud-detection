@@ -68,12 +68,13 @@ neobanx-fraud-detection/
 ├── Frontend/                         Demo en Streamlit, desplegado en Cloud Run (María)
 │   ├── app.py                        Simula transacciones y muestra el veredicto en vivo
 │   ├── Dockerfile
-│   └── requirements.txt
+│   ├── requirements.txt
+│   └── README.md                     Cómo usar el demo desplegado o correrlo en local
 ├── Infrastructure/                   Todo lo que existe en GCP, vía Terraform (Larry)
-│   ├── main.tf                       Pub/Sub, BigQuery, Cloud SQL, Cloud Function, Cloud Run
+│   ├── main.tf                       BigQuery, Cloud Function, Cloud Run (Pub/Sub y la instancia de Cloud SQL ya existían, no los crea este Terraform — ver excepciones en el README de esta carpeta)
 │   ├── variables.tf                  project_id, region, db_password (sensible)
 │   ├── schema.sql                    Tablas clientes / transacciones / alertas
-│   └── README.md                     Estado del despliegue + cómo desplegar desde cero
+│   └── README.md                     Requisitos, secretos, recursos, estado del despliegue
 ├── Documentation/                    Gobernanza y calidad de datos (Camilo)
 │   ├── Diccionario datos.md
 │   ├── hallazgos_profiling_fase2.md
@@ -132,6 +133,12 @@ El proyecto sigue una cadencia ágil (Scrum) apoyada en CRISP-DM (comprensión d
  
 **No incluye:** entrenamiento de modelos de ML/DL, desarrollo de una aplicación bancaria de cara al cliente, implementación completa de DAMA-DMBOK, ni conexión con datos financieros reales. El demo en `Frontend/` es una herramienta interna de validación del pipeline (simula transacciones y muestra el veredicto), no un producto para clientes del neobanco; la regla de veredicto que usa hoy es lógica simple por monto/categoría, no un modelo entrenado.
  
+## Documentación y presentación del Sprint 1
+
+- Guías de cada componente: [`Backend/README.md`](Backend/README.md), [`Frontend/README.md`](Frontend/README.md), [`Infrastructure/README.md`](Infrastructure/README.md).
+- Gobernanza y calidad de datos: ver sección "Gobernanza y calidad de datos" arriba.
+- Presentación del Sprint 1: **pendiente** — agregar aquí el enlace (Drive/Slides) cuando exista.
+
 ## Referencias
  
 - SCARFF: Scalable Real-time Fraud Finder — [arxiv.org/pdf/1709.08920](https://arxiv.org/pdf/1709.08920)

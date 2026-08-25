@@ -55,7 +55,59 @@ Componentes ya provisionados y probados end-to-end:
 | Regla baseline de veredicto en `consumidor` | ✅ Desplegada — agrega `veredicto` (aprobada/alerta) a cada fila de BigQuery | Por monto y categoría, no es un modelo entrenado — placeholder hasta que exista el flujo de Spark |
 | Frontend demo (`Frontend/`) en Cloud Run | ✅ Desplegado vía Terraform (`google_cloud_run_v2_service.frontend`), acceso público | Simula transacciones hacia Pub/Sub y muestra las últimas 20 con su veredicto desde BigQuery |
 
-### Cómo desplegar desde cero (reproducible, sin pasos manuales)
+## Requisitos
+
+| Herramienta | Versión | Para qué |
+|---|---|---|
+| Terraform | >= 1.7 | Desplegar toda la infraestructura (`required_version` en `main.tf`) |
+| Provider `google` | ~> 6.0 | Fijado en `main.tf`, no requiere acción manual |
+| gcloud CLI | cualquiera reciente | Autenticación (`gcloud auth ...`) y verificación (`gcloud pubsub`, `bq query`) |
+| Python | 3.11+ | Generador, consumidor (runtime `python312` en Cloud Functions) y frontend |
+| Docker | **No hace falta instalarlo localmente** | El Dockerfile de `Frontend/` se construye en Cloud Build automáticamente (`gcloud builds submit`, disparado por Terraform), no en tu máquina |
+
+## Configuración del proyecto GCP
+
+Variables en `Infrastructure/variables.tf`:
+
+| Variable | Default | Requerida |
+|---|---|---|
+| `project_id` | `neobanx-fraud-detection` | No (ya parametrizado) |
+| `region` | `us-central1` | No (ya parametrizado) |
+| `db_password` | — | **Sí**, sin default — contraseña del usuario `postgres` de Cloud SQL |
+
+## Manejo de secretos y credenciales
+
+Nada de esto vive en el repo (verificado, sin credenciales reales commiteadas):
+
+| Secreto | Dónde vive | Notas |
+|---|---|---|
+| `db_password` | `terraform.tfvars` local, gitignored | Ver documento privado del equipo |
+| Credenciales de `gcloud`/ADC | `gcloud auth application-default login`, guardadas por el SDK fuera del repo | Una por cada máquina/persona |
+| `GENERATOR_SALT` | Variable de entorno local, no versionada | Provisional — ver nota abajo |
+| Clave HMAC para `cc_num_hash` | **Pendiente**: debe crearse en Secret Manager | Ver `Documentation/reglas_calidad_neobanx.md` — el generador aún no la usa |
+
+## Recursos que crea este Terraform
+
+- 5 APIs habilitadas: Cloud Functions, Cloud Build, Cloud Run, Eventarc, Artifact Registry
+- Dataset + tabla de BigQuery (`raw.transacciones_raw`, particionada por fecha)
+- Base de datos `neobanx` dentro de la instancia de Cloud SQL (ver excepción abajo — la instancia en sí no la crea este Terraform) + su esquema (`schema.sql`, aplicado vía `psql`)
+- Bucket de Cloud Storage + objeto con el código zippeado del consumidor
+- Cloud Function v2 `consumidor` (trigger de Pub/Sub)
+- Repositorio de Artifact Registry + imagen Docker del frontend (build en Cloud Build) + servicio de Cloud Run `neobanx-demo` + su binding público de IAM
+
+**No crea:** el tópico/suscripción de Pub/Sub ni la instancia de Cloud SQL en sí — ver la sección de excepciones.
+
+## Excepciones de configuración manual
+
+No todo pasó por Terraform. Documentado para que quede claro y sea verificable:
+
+| Qué se hizo a mano | Por qué | Cómo verificarlo |
+|---|---|---|
+| La instancia de Cloud SQL `neobanx-transaccional` **no la crea este Terraform** — `main.tf` solo la referencia como `data "google_sql_database_instance"`, asumiendo que ya existe | Se creó en Sprint 0, antes de escribir el Terraform de este repo | `gcloud sql instances describe neobanx-transaccional` — existe y el `data` block la encuentra por nombre |
+| Un registro de prueba en `clientes` se insertó a mano vía `psql`, no vía `schema.sql` (que solo crea tablas vacías) | Validar que el esquema y la llave foránea funcionan antes de que existiera el generador | `SELECT * FROM clientes;` desde Cloud Shell — 1 fila con `cc_num_hash = 'abc123hash'` (valor de prueba, no un hash real) |
+| Encender/apagar la instancia de Cloud SQL (`gcloud sql instances patch --activation-policy`) | Ahorrar créditos cuando nadie la está usando — no es parte del ciclo de vida de Terraform | `gcloud sql instances describe neobanx-transaccional --format="value(state)"` |
+
+## Cómo desplegar desde cero (reproducible salvo las excepciones de arriba)
 
 ```bash
 cd Infrastructure
@@ -64,11 +116,7 @@ terraform plan
 terraform apply
 ```
 
-Requiere un archivo `terraform.tfvars` local (no versionado, no se sube al repo) con:
-
-```hcl
-db_password = "<contraseña del usuario postgres — ver documento privado del equipo>"
-```
+Requiere el `terraform.tfvars` descrito arriba en "Configuración del proyecto GCP".
 
 Para destruir todo y no dejar nada corriendo (ahorro de créditos):
 
@@ -76,10 +124,25 @@ Para destruir todo y no dejar nada corriendo (ahorro de créditos):
 terraform destroy
 ```
 
+Esto **no** destruye la instancia de Cloud SQL en sí (no la creó este Terraform, solo la referencia) — para apagarla en vez de borrarla, ver "Excepciones de configuración manual" arriba.
+
 ### Contrato de datos del generador
 
 El formato exacto del mensaje que debe publicar el generador de streaming a Pub/Sub está
 documentado en [`Backend/contrato_datos_generador.md`](../Backend/contrato_datos_generador.md).
+
+### Cómo comprobar que el pipeline funciona
+
+Cada componente tiene su propia guía de prueba:
+
+- **Generador → Pub/Sub → BigQuery**: [`Backend/README.md`](../Backend/README.md), sección
+  "Generador — uso local" — incluye cómo correr una ventana corta y verificar con
+  `gcloud pubsub subscriptions pull` y `bq query`.
+- **Frontend**: [`Frontend/README.md`](../Frontend/README.md) — botón de simulación +
+  tabla en vivo desde BigQuery.
+
+Prueba de referencia ya ejecutada contra el proyecto real: 268 transacciones publicadas,
+28 fraudes verificados en `raw.transacciones_raw` (ver tabla de estado arriba).
 
 ### Pendiente
 
