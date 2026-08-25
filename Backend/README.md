@@ -48,6 +48,11 @@ Campos de perfil del cliente (`first`, `last`, `gender`, `street`, `city`,
 `state`, `zip`, `lat`, `long`, `city_pop`, `job`, `dob`) no van en este
 mensaje — ya estan precargados en la tabla `clientes` de Cloud SQL.
 
+El consumidor agrega un campo mas al insertar en BigQuery, `veredicto`
+(`aprobada`/`alerta`), calculado con una regla baseline simple (monto +
+categoria) — no viene del generador ni es un modelo entrenado, es un
+placeholder hasta que exista el flujo de Spark Structured Streaming.
+
 ## Generador — uso local
 
 1. Descargar `fraudTrain.csv` (Kaggle `kartik2112/fraud-detection`) y
@@ -64,14 +69,15 @@ mensaje — ya estan precargados en la tabla `clientes` de Cloud SQL.
    $env:GENERATOR_SALT = "<tu-salt>"
    ```
 
-   ⚠️ **Pendiente de coordinar con el equipo:** `clientes.cc_num_hash` en
-   Cloud SQL hoy solo tiene un valor de prueba (`abc123hash`), no un hash
-   real — todavia no existe un salt oficial. Antes de construir el flujo
-   transaccional que hace join entre `clientes` y `transacciones` por
-   `cc_num_hash`, el equipo debe fijar un unico salt (y el mismo algoritmo:
-   `sha256(salt + cc_num)[:10]`) para que ambos lados generen el mismo hash
-   por el mismo numero de tarjeta. Mientras tanto, cualquier salt local sirve
-   para probar el generador de forma aislada.
+   ⚠️ **Pendiente:** `Documentation/reglas_calidad_neobanx.md` ya especifica
+   la tecnica correcta para `cc_num_hash` — HMAC-SHA256 con una clave secreta
+   fija guardada en Secret Manager (un salt aleatorio por registro, como usa
+   `hash_cc_num` hoy, no sirve porque el hash tiene que ser determinista para
+   que el join con `clientes.cc_num_hash` funcione). Falta migrar
+   `hash_cc_num` a esa tecnica y crear el secreto en Secret Manager. Mientras
+   tanto, `clientes.cc_num_hash` en Cloud SQL solo tiene un valor de prueba
+   (`abc123hash`), asi que cualquier salt local sirve para probar el
+   generador de forma aislada sin romper nada.
 5. Ejecutar:
    ```powershell
    python main.py

@@ -52,6 +52,8 @@ Componentes ya provisionados y probados end-to-end:
 | Registros de prueba en Cloud SQL | ✅ Insertados y validados con JOIN entre las 3 tablas | Consulta en psql |
 | Cloud Function `consumidor` (Pub/Sub → BigQuery Raw) | ✅ Desplegada vía Terraform, probada end-to-end | Mensaje de prueba publicado desde Cloud Shell y verificado en BigQuery |
 | Generador (Juanes) — `Backend/generador/` | ✅ Probado end-to-end contra el proyecto real | 268 transacciones reales publicadas (ventana 2019-02-25 22:00–00:00), 28 fraudes verificados en `raw.transacciones_raw` |
+| Regla baseline de veredicto en `consumidor` | ✅ Desplegada — agrega `veredicto` (aprobada/alerta) a cada fila de BigQuery | Por monto y categoría, no es un modelo entrenado — placeholder hasta que exista el flujo de Spark |
+| Frontend demo (`Frontend/`) en Cloud Run | ✅ Desplegado vía Terraform (`google_cloud_run_v2_service.frontend`), acceso público | Simula transacciones hacia Pub/Sub y muestra las últimas 20 con su veredicto desde BigQuery |
 
 ### Cómo desplegar desde cero (reproducible, sin pasos manuales)
 
@@ -87,8 +89,13 @@ documentado en [`Backend/contrato_datos_generador.md`](../Backend/contrato_datos
 - Integración con Redis/Memorystore en el flujo de enriquecimiento de Spark. La consulta a
   Nager.Date ya está integrada y probada como módulo reutilizable (`Backend/generador/holidays.py`);
   falta conectarla al enriquecimiento del job de Spark.
-- **Coordinar el salt de `cc_num_hash` entre el generador y la carga de `clientes` en Cloud SQL.**
-  Hoy `clientes.cc_num_hash` solo tiene un valor de prueba (`abc123hash`, no un hash real) y el
-  generador usa un salt provisional local — antes de construir el flujo transaccional que hace
-  join entre `clientes` y `transacciones` por `cc_num_hash`, el equipo debe fijar un único salt
-  y algoritmo para ambos lados, o los joins no van a coincidir.
+- **Implementar `cc_num_hash` según `Documentation/reglas_calidad_neobanx.md`.**
+  Las reglas de calidad ya especifican la técnica correcta: HMAC-SHA256 con una clave secreta fija
+  guardada en Secret Manager (no un salt aleatorio por registro como usa hoy el generador de forma
+  provisional). Falta: crear el secreto en Secret Manager, actualizar `hash_cc_num` en
+  `Backend/generador/main.py` para usarlo, y cargar `clientes.cc_num_hash` con la misma clave (hoy
+  solo tiene un valor de prueba, `abc123hash`, no un hash real) — si no, los joins entre `clientes`
+  y `transacciones` no van a coincidir.
+- **Revisar el acceso público del frontend demo.** `google_cloud_run_v2_service_iam_member.frontend_public`
+  lo deja abierto a `allUsers` — está bien para un demo de sprint, pero vale la pena decidir como
+  equipo si se restringe antes de la sustentación final.
