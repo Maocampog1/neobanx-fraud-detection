@@ -74,6 +74,7 @@ resource "google_bigquery_table" "transacciones_raw" {
     { name = "merch_lat", type = "FLOAT" },
     { name = "merch_long", type = "FLOAT" },
     { name = "is_fraud", type = "INTEGER" },
+    { name = "veredicto", type = "STRING" },
     { name = "ingestion_timestamp", type = "TIMESTAMP" },
     { name = "pubsub_message_id", type = "STRING" }
   ])
@@ -167,4 +168,61 @@ resource "google_cloudfunctions2_function" "consumidor" {
     pubsub_topic   = "projects/${var.project_id}/topics/transacciones-neobanx"
     retry_policy   = "RETRY_POLICY_RETRY"
   }
+}
+
+# --- Frontend: Streamlit en Cloud Run ---
+
+resource "google_project_service" "run_frontend_deps" {
+  for_each = toset([
+    "artifactregistry.googleapis.com",
+    "cloudbuild.googleapis.com",
+    "run.googleapis.com",
+  ])
+  service            = each.value
+  disable_on_destroy = false
+}
+
+resource "google_artifact_registry_repository" "frontend" {
+  location      = var.region
+  repository_id = "frontend"
+  format        = "DOCKER"
+
+  depends_on = [google_project_service.run_frontend_deps]
+}
+
+resource "null_resource" "build_frontend_image" {
+  triggers = {
+    app_hash = filesha256("${path.module}/../Frontend/app.py")
+  }
+
+  provisioner "local-exec" {
+    working_dir = "${path.module}/../Frontend"
+    command      = "gcloud builds submit --tag ${var.region}-docker.pkg.dev/${var.project_id}/frontend/neobanx-demo:latest --project=${var.project_id}"
+  }
+
+  depends_on = [google_artifact_registry_repository.frontend]
+}
+
+resource "google_cloud_run_v2_service" "frontend" {
+  name     = "neobanx-demo"
+  location = var.region
+
+  depends_on = [null_resource.build_frontend_image]
+
+  template {
+    containers {
+      image = "${var.region}-docker.pkg.dev/${var.project_id}/frontend/neobanx-demo:latest"
+    }
+  }
+}
+
+resource "google_cloud_run_v2_service_iam_member" "frontend_public" {
+  location = google_cloud_run_v2_service.frontend.location
+  name     = google_cloud_run_v2_service.frontend.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+
+output "frontend_url" {
+  value = google_cloud_run_v2_service.frontend.uri
 }
