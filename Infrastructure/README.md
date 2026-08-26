@@ -1,6 +1,7 @@
 # Arquitectura — NeobanX (Detección de Fraude en Streaming)
 
-<img width="1311" height="779" alt="image" src="https://github.com/user-attachments/assets/f765937d-8d69-40b8-8116-26ce8de71ea4" />
+<img width="1252" height="758" alt="image" src="https://github.com/user-attachments/assets/f8a74f9d-01d7-428f-a047-52495c762e5d" />
+
 
 
 ## Leyenda de componentes
