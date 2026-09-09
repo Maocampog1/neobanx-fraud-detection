@@ -215,6 +215,50 @@ chmod +x scripts/bootstrap.sh scripts/deploy.sh scripts/destroy.sh
 
 > **Nota de alcance**: el tópico de Pub/Sub y la instancia de Cloud SQL (`neobanx-transaccional`) se aprovisionaron en el Sprint 0 y este Terraform los referencia (`data` sources), no los vuelve a crear. Esto está documentado como excepción en la sección "Procesos manuales" más abajo.
 
+## Cómo correr el generador de streaming
+
+El generador (`Backend/generador/main.py`) lee su configuración (`GENERATOR_SALT`, `FECHA_INICIO`, `FECHA_FIN`, `TOPIC_ID`, `MAX_FILAS`) desde variables de entorno. En vez de escribir esas variables a mano cada vez, se cargan automáticamente desde el `.env` de la raíz del repo con `source`.
+
+### Requisitos
+
+- Haber completado el `.env` (ver sección "Scripts de reproducibilidad" arriba).
+- Tener `fraudTrain.csv` (Kaggle `kartik2112/fraud-detection`) en `Backend/generador/data/fraudTrain.csv` — no se versiona (`.gitignore`).
+
+### Pasos (en Git Bash)
+
+```bash
+cd Backend/generador
+pip install -r requirements.txt
+
+# Carga las variables del .env de la raíz del repo en esta terminal
+set -a
+source ../../.env
+set +a
+
+python main.py
+```
+
+Verifica que las variables sí se cargaron antes de correr `main.py`:
+
+```bash
+echo "GENERATOR_SALT=$GENERATOR_SALT"
+echo "FECHA_INICIO=$FECHA_INICIO"
+echo "FECHA_FIN=$FECHA_FIN"
+```
+
+Si alguna sale vacía, confirma que estás parado en `Backend/generador/` (`pwd`) y que el `.env` existe dos niveles arriba (`ls ../../.env`).
+
+### Verificar que el pipeline recibió las transacciones
+
+En una segunda terminal de Git Bash, sin cerrar la que está corriendo el generador:
+
+```bash
+bq query --project_id=neobanx-fraud-detection --use_legacy_sql=false \
+  "SELECT trans_num, merchant, amt, veredicto, ingestion_timestamp FROM \`neobanx-fraud-detection.raw.transacciones_raw\` ORDER BY ingestion_timestamp DESC LIMIT 5"
+```
+
+Si aparecen filas nuevas con `veredicto` en `aprobada`/`alerta`, el pipeline generador → Pub/Sub → Cloud Function → BigQuery está funcionando de punta a punta. También se puede observar en vivo desde el demo del frontend (`Frontend/README.md`).
+
 ## Manejo de credenciales, secretos y tokens
 
 **Ningún secreto real está ni ha estado en el historial de este repositorio.**
