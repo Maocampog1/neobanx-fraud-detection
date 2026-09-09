@@ -13,3 +13,6 @@ __pycache__/
 
 # Zips generados
 Infrastructure/consumidor.zip
+
+#env
+.env

@@ -59,8 +59,14 @@ La tabla de arriba es la arquitectura objetivo del proyecto completo. Esto es lo
 
 ```
 neobanx-fraud-detection/
-├── deploy.sh                         Despliega toda la infraestructura definida en Terraform
-├── destroy.sh                        Destruye toda la infraestructura definida en Terraform
+├── .env                               Secretos y config real (NUNCA se sube, .gitignore)
+├── .env.example                       Plantilla de .env — SÍ se versiona
+├── .gitignore
+├── .gitattributes                     Normaliza saltos de línea (LF) en .sh y .env
+├── scripts/
+│   ├── bootstrap.sh                   Crea .env, autentica gcloud, genera terraform.tfvars
+│   ├── deploy.sh                      Despliega toda la infraestructura definida en Terraform
+│   └── destroy.sh                     Destruye toda la infraestructura definida en Terraform
 ├── Backend/
 │   ├── generador/                    Lee fraudTrain.csv y publica a Pub/Sub (Juanes)
 │   │   ├── main.py                   Limpieza, orden cronologico, hash de PII, publish
@@ -82,7 +88,8 @@ neobanx-fraud-detection/
 │   ├── main.tf                       BigQuery, esquema Cloud SQL, Cloud Function, Cloud Run
 │   ├── variables.tf                  project_id, region, db_password (sensible)
 │   ├── schema.sql                    DDL: tablas clientes / transacciones / alertas
-│   ├── terraform.tfvars              Valores reales - NUNCA versionado (.gitignore)
+│   ├── terraform.tfvars.example      Plantilla de terraform.tfvars — SÍ se versiona
+│   ├── terraform.tfvars              Valores reales, generado por bootstrap.sh (.gitignore)
 │   └── README.md                     Requisitos, secretos, recursos, estado del despliegue
 ├── Documentation/                    Gobernanza y calidad de datos (Camilo)
 │   ├── Diccionario datos.md
@@ -96,46 +103,125 @@ Cada carpeta con código tiene su propio README.md con el detalle — este archi
 
 ## Scripts de reproducibilidad
 
-La infraestructura definida en este repositorio (BigQuery, esquema de Cloud SQL, Cloud Function consumidor, frontend en Cloud Run) se gestiona íntegramente con **Terraform** (`Infrastructure/main.tf`) y se despliega o destruye con un solo comando.
+Todo el entorno local (autenticación, configuración y despliegue) se levanta con unos pocos comandos, gracias a `.env` + `scripts/bootstrap.sh` + Terraform.
 
-> **Nota de alcance**: el tópico de Pub/Sub y la instancia de Cloud SQL (`neobanx-transaccional`) se aprovisionaron en el Sprint 0 y este Terraform los referencia (`data` sources), no los vuelve a crear. Esto está documentado como excepción en la sección "Procesos manuales" más abajo.
+### Requisitos previos (una sola vez por máquina)
 
-### Requisitos previos
-
-- `gcloud` CLI autenticado: `gcloud auth application-default login`
+- `gcloud` CLI instalado
 - `terraform` >= 1.7
 - `psql` (usado internamente por Terraform para aplicar `schema.sql` a Cloud SQL)
-- Un archivo `Infrastructure/terraform.tfvars` local (nunca versionado):
-  ```hcl
-  project_id  = "neobanx-fraud-detection"
-  region      = "us-central1"
-  db_password = "<contraseña real, ver documento privado del equipo>"
-  ```
+- Python 3.11+ (si vas a correr el generador de streaming)
+- **Git Bash** (en Windows, necesario para correr los scripts `.sh` de este repo — PowerShell/CMD no son compatibles con ellos)
 
-### Desplegar (o actualizar) toda la infraestructura
+### Paso 1 — Clonar el repo y crear tu `.env`
 
 ```bash
-./deploy.sh          # terraform init + plan + apply, pide confirmación
-./deploy.sh --yes    # sin confirmación, para automatización
+git clone <url-del-repo>
+cd neobanx-fraud-detection
+cp .env.example .env
 ```
 
-En este proyecto `deploy.sh` cumple doble función: la primera vez **crea** los recursos, y en corridas posteriores **actualiza** cualquier cambio en el código (por ejemplo, si se modifica `main.py` del consumidor o `schema.sql`, Terraform detecta el cambio por hash y vuelve a aplicar solo lo necesario) — es el mismo comando para desplegar y para actualizar.
+Edita `.env` con los valores reales del equipo (pide `DB_PASSWORD` y `GENERATOR_SALT` por el documento privado del equipo, nunca por chat abierto). Formato esperado — **sin espacios alrededor del `=`**, y con comillas en los valores que tengan espacios (ej. fechas):
 
-### Destruir toda la infraestructura
+```dotenv
+GCP_PROJECT_ID=neobanx-fraud-detection
+GCP_REGION=us-central1
+
+DB_INSTANCE_NAME=neobanx-transaccional
+DB_NAME=neobanx
+DB_PASSWORD=<contraseña real del equipo>
+
+GENERATOR_SALT=<salt real del equipo>
+TOPIC_ID=transacciones-neobanx
+FECHA_INICIO="2019-02-25 22:00:00"
+FECHA_FIN="2019-02-26 00:00:00"
+MAX_FILAS=
+```
+
+### Paso 2 — Dar permisos de ejecución a los scripts (una sola vez por máquina, en Git Bash)
 
 ```bash
-./destroy.sh          # terraform destroy, pide confirmación
-./destroy.sh --yes    # sin confirmación
+chmod +x scripts/bootstrap.sh
+chmod +x scripts/deploy.sh scripts/destroy.sh
+```
+
+### Paso 3 — Bootstrap: autentica gcloud y genera `terraform.tfvars` automáticamente
+
+```bash
+./scripts/bootstrap.sh
+```
+
+Esto hace, en orden:
+1. Verifica que `gcloud`, `terraform` y `psql` estén instalados.
+2. Autentica tu cuenta de Google con gcloud.
+3. Genera `Infrastructure/terraform.tfvars` automáticamente a partir de tu `.env` — **nunca lo escribas a mano**.
+
+> **Nota — si el login por navegador falla** (error `mismatching_state` / CSRF, común en Windows/Git Bash), usa el flujo manual, en dos ventanas de Git Bash:
+> ```bash
+> gcloud auth login --no-browser
+> gcloud auth application-default login --no-browser
+> ```
+> Cada comando te da un link para abrir en el navegador y espera un código/comando de vuelta en la terminal. Verifica que quedaste autenticada con:
+> ```bash
+> gcloud auth list
+> ```
+> Debe mostrar tu cuenta con un `*` (cuenta activa). Este login solo se pide **una vez por máquina** — las siguientes veces que corras `bootstrap.sh`, si ya hay sesión activa, se salta este paso automáticamente.
+
+### Paso 4 — Desplegar (o actualizar) toda la infraestructura
+
+```bash
+./scripts/deploy.sh          # terraform init + plan + apply, pide confirmación
+./scripts/deploy.sh --yes    # sin confirmación, para automatización
+```
+
+`deploy.sh` cumple doble función: la primera vez **crea** los recursos, y en corridas posteriores **actualiza** cualquier cambio en el código (por ejemplo, si se modifica `main.py` del consumidor o `schema.sql`, Terraform detecta el cambio por hash y vuelve a aplicar solo lo necesario) — es el mismo comando para desplegar y para actualizar.
+
+> **Nota — "Already Exists" al desplegar desde una máquina nueva**: como el estado de Terraform (`terraform.tfstate`) hoy es local a cada máquina, si alguien ya desplegó estos recursos desde otra computadora, tu `apply` puede fallar con errores `409: Already Exists`. Se soluciona importando el recurso al estado local antes de repetir el `apply`, por ejemplo:
+> ```bash
+> cd Infrastructure
+> terraform import google_bigquery_dataset.raw projects/neobanx-fraud-detection/datasets/raw
+> ```
+> *Plan de remediación*: migrar a un backend remoto de Terraform (bucket de GCS compartido) para que todo el equipo use el mismo estado y este paso deje de ser necesario.
+
+### Paso 5 — Destruir toda la infraestructura (cuando termines de trabajar)
+
+```bash
+./scripts/destroy.sh          # terraform destroy, pide confirmación
+./scripts/destroy.sh --yes    # sin confirmación
 ```
 
 Elimina todo lo gestionado por este Terraform, para no dejar recursos consumiendo créditos educativos.
+
+> **Nota — Cloud SQL cobra por tiempo activo**, no solo por uso real: si no vas a destruir toda la infraestructura pero sí terminaste de trabajar por el día, apaga solo la instancia:
+> ```bash
+> gcloud sql instances patch neobanx-transaccional --activation-policy=NEVER --project=neobanx-fraud-detection
+> ```
+> Y para volver a prenderla antes de trabajar:
+> ```bash
+> gcloud sql instances patch neobanx-transaccional --activation-policy=ALWAYS --project=neobanx-fraud-detection
+> ```
+
+### Resumen — flujo completo desde cero
+
+```bash
+git clone <url-del-repo>
+cd neobanx-fraud-detection
+cp .env.example .env
+# editar .env con los valores reales del equipo
+chmod +x scripts/bootstrap.sh scripts/deploy.sh scripts/destroy.sh
+./scripts/bootstrap.sh
+./scripts/deploy.sh --yes
+```
+
+> **Nota de alcance**: el tópico de Pub/Sub y la instancia de Cloud SQL (`neobanx-transaccional`) se aprovisionaron en el Sprint 0 y este Terraform los referencia (`data` sources), no los vuelve a crear. Esto está documentado como excepción en la sección "Procesos manuales" más abajo.
 
 ## Manejo de credenciales, secretos y tokens
 
 **Ningún secreto real está ni ha estado en el historial de este repositorio.**
 
-- `terraform.tfvars` (contiene `db_password`) está en `.gitignore` desde el primer commit de infraestructura
-- `terraform.tfstate` / `terraform.tfstate.backup` están en `.gitignore` — pueden contener valores sensibles una vez aplicados
+- `.env` (contiene `DB_PASSWORD`, `GENERATOR_SALT`) está en `.gitignore` desde su creación; solo `.env.example` (con valores ficticios tipo `changeme`) se versiona
+- `terraform.tfvars` (contiene `db_password`) está en `.gitignore`; solo `terraform.tfvars.example` se versiona, y el real lo genera automáticamente `scripts/bootstrap.sh` a partir de `.env`
+- `terraform.tfstate` / `terraform.tfstate.backup` están en `.gitignore` — pueden contener valores sensibles una vez aplicados, y **nunca deben subirse a git** (quedarían legibles en el historial de commits)
 - `db_password` está declarada `sensitive = true` en `variables.tf`, para que Terraform la oculte en logs y outputs
 - No existen archivos de *service account* (`.json` de credenciales) en el repositorio; la autenticación local se hace vía `gcloud auth application-default login`, que guarda las credenciales fuera del proyecto
 - Contraseñas y claves reales se comparten por un documento privado del equipo (Drive), nunca por chat abierto ni por commit
@@ -161,6 +247,10 @@ Elimina todo lo gestionado por este Terraform, para no dejar recursos consumiend
   *Por qué se hizo manual*: automatizarlo con IPs dinámicas por integrante o Cloud SQL Auth Proxy requería tiempo adicional no disponible en el Sprint 1.
   *Riesgo aceptado*: la instancia solo contiene datos sintéticos de prueba.
   *Plan de remediación (Sprint 2)*: Cloud SQL Auth Proxy o restricción a IPs específicas del equipo, gestionado vía Terraform.
+
+- **Estado de Terraform (`terraform.tfstate`) local a cada máquina**: al ser un repo de equipo, cada integrante que corre `deploy.sh` desde su propia computadora mantiene su propia copia local del estado, lo que puede producir errores `409: Already Exists` si el recurso ya fue creado desde otra máquina (ver nota en la sección "Scripts de reproducibilidad").
+  *Por qué se hizo así*: para el Sprint 1 se priorizó tener el pipeline funcionando end-to-end sobre configurar infraestructura de estado remoto.
+  *Plan de remediación (Sprint 2)*: backend remoto de Terraform sobre un bucket de Google Cloud Storage (GCS), compartido por todo el equipo, con bloqueo de estado para evitar que dos personas apliquen cambios al mismo tiempo.
 
 Ningún otro recurso (BigQuery, Cloud Function, Cloud Run, IAM, APIs habilitadas) se creó o modificó manualmente — todo vive en `Infrastructure/main.tf`.
 
