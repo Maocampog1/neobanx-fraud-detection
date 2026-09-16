@@ -10,10 +10,10 @@ NeobanX es un neobanco digital ficticio (caso de estudio simulado) que actualmen
 
 ## Equipo
 
-| Nombre | Rol |
-|---|---|
-| Juan Esteban Alzate | Arquitecto de Datos / Líder Técnico — generador de streaming, ingesta de datos |
-| Camilo Salazar Acevedo | Gobernanza y Calidad de Datos — perfilamiento, diccionario de datos, reglas de calidad, Ley 1581 |
+| Nombre                  | Rol                                                                                                                          |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Juan Esteban Alzate     | Arquitecto de Datos / Líder Técnico — generador de streaming, ingesta de datos                                            |
+| Camilo Salazar Acevedo  | Gobernanza y Calidad de Datos — perfilamiento, diccionario de datos, reglas de calidad, Ley 1581                            |
 | María Alejandra Ocampo | Infraestructura y Despliegue Cloud — arquitectura GCP, Terraform, Cloud SQL, BigQuery, Cloud Functions, Cloud Run, frontend |
 
 ## Presentación y demo del Sprint 1
@@ -28,32 +28,32 @@ NeobanX es un neobanco digital ficticio (caso de estudio simulado) que actualmen
 Fuentes ──▶ Ingesta ──▶ Procesamiento ──▶ Almacenamiento ──▶ Visualización
 ```
 
-| Capa | Tecnología | Rol |
-|---|---|---|
-| Fuentes | Dataset Sparkov (Kaggle), API Nager.Date | Base de transacciones y perfil de cliente; calendario de festivos |
-| Ingesta | Google Pub/Sub | Streaming de eventos, respetando la cadencia temporal original |
-| Procesamiento | Dataproc / Spark Structured Streaming (objetivo) | Enriquecimiento y aplicación de reglas de detección de fraude |
-| Almacenamiento — Transaccional | Cloud SQL (PostgreSQL) | Registro y bloqueo de operaciones con garantías ACID |
-| Almacenamiento — Analítico | BigQuery (modelo en estrella, objetivo) | Consultas agregadas para el dashboard |
-| Almacenamiento — Distribuido | Redis / Memorystore (objetivo) | Perfil del cliente en clave-valor, baja latencia |
-| Visualización | Looker Studio (objetivo) | Dashboard de estadísticas de fraude |
+| Capa                            | Tecnología                                      | Rol                                                               |
+| ------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------- |
+| Fuentes                         | Dataset Sparkov (Kaggle), API Nager.Date         | Base de transacciones y perfil de cliente; calendario de festivos |
+| Ingesta                         | Google Pub/Sub                                   | Streaming de eventos, respetando la cadencia temporal original    |
+| Procesamiento                   | Dataproc / Spark Structured Streaming (objetivo) | Enriquecimiento y aplicación de reglas de detección de fraude   |
+| Almacenamiento — Transaccional | Cloud SQL (PostgreSQL)                           | Registro y bloqueo de operaciones con garantías ACID             |
+| Almacenamiento — Analítico    | BigQuery (modelo en estrella, objetivo)          | Consultas agregadas para el dashboard                             |
+| Almacenamiento — Distribuido   | Redis / Memorystore (objetivo)                   | Perfil del cliente en clave-valor, baja latencia                  |
+| Visualización                  | Looker Studio (objetivo)                         | Dashboard de estadísticas de fraude                              |
 
 ### Estado actual (Sprint 1 — Alfa)
 
 La tabla de arriba es la arquitectura objetivo del proyecto completo. Esto es lo que ya está construido y corriendo de verdad en GCP hoy:
 
-| Componente | Estado |
-|---|---|
-| Generador (Backend/generador/) — CSV Sparkov a Pub/Sub | Construido y probado end-to-end contra el proyecto real |
-| Cloud Function consumidor — Pub/Sub a BigQuery Raw | Desplegada, incluye regla baseline de veredicto (aprobada/alerta) |
-| BigQuery Raw (raw.transacciones_raw) | Desplegado vía Terraform, particionado por fecha |
-| Cloud SQL (esquema clientes/transacciones/alertas) | Esquema desplegado; sin datos reales de clientes cargados aún |
-| Demo Streamlit en Cloud Run (Frontend/) | Desplegado — simula transacciones y muestra el veredicto en vivo |
-| Diccionario de datos y reglas de calidad (Documentation/) | Documentados a partir del perfilamiento del dataset |
-| Spark Structured Streaming sobre Dataproc | Pendiente (Sprint 2) |
-| Redis / Memorystore (perfil de cliente en streaming) | Pendiente (Sprint 2) |
-| Looker Studio | Pendiente — el demo de Streamlit cubre esa necesidad por ahora |
-| Modelo de detección real (ML) | Pendiente — hoy es una regla simple por monto+categoría, para demostrar el flujo completo |
+| Componente                                                | Estado                                                                                      |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Generador (Backend/generador/) — CSV Sparkov a Pub/Sub   | Construido y probado end-to-end contra el proyecto real                                     |
+| Cloud Function consumidor — Pub/Sub a BigQuery Raw       | Desplegada, incluye regla baseline de veredicto (aprobada/alerta)                           |
+| BigQuery Raw (raw.transacciones_raw)                      | Desplegado vía Terraform, particionado por fecha                                           |
+| Cloud SQL (esquema clientes/transacciones/alertas)        | Esquema desplegado; sin datos reales de clientes cargados aún                              |
+| Demo Streamlit en Cloud Run (Frontend/)                   | Desplegado — simula transacciones y muestra el veredicto en vivo                           |
+| Diccionario de datos y reglas de calidad (Documentation/) | Documentados a partir del perfilamiento del dataset                                         |
+| Spark Structured Streaming sobre Dataproc                 | Pendiente (Sprint 2)                                                                        |
+| Redis / Memorystore (perfil de cliente en streaming)      | Pendiente (Sprint 2)                                                                        |
+| Looker Studio                                             | Pendiente — el demo de Streamlit cubre esa necesidad por ahora                             |
+| Modelo de detección real (ML)                            | Pendiente — hoy es una regla simple por monto+categoría, para demostrar el flujo completo |
 
 ## Estructura del proyecto
 
@@ -152,19 +152,24 @@ chmod +x scripts/deploy.sh scripts/destroy.sh
 ```
 
 Esto hace, en orden:
+
 1. Verifica que `gcloud`, `terraform` y `psql` estén instalados.
 2. Autentica tu cuenta de Google con gcloud.
 3. Genera `Infrastructure/terraform.tfvars` automáticamente a partir de tu `.env` — **nunca lo escribas a mano**.
 
 > **Nota — si el login por navegador falla** (error `mismatching_state` / CSRF, común en Windows/Git Bash), usa el flujo manual, en dos ventanas de Git Bash:
+>
 > ```bash
 > gcloud auth login --no-browser
 > gcloud auth application-default login --no-browser
 > ```
+>
 > Cada comando te da un link para abrir en el navegador y espera un código/comando de vuelta en la terminal. Verifica que quedaste autenticada con:
+>
 > ```bash
 > gcloud auth list
 > ```
+>
 > Debe mostrar tu cuenta con un `*` (cuenta activa). Este login solo se pide **una vez por máquina** — las siguientes veces que corras `bootstrap.sh`, si ya hay sesión activa, se salta este paso automáticamente.
 
 ### Paso 4 — Desplegar (o actualizar) toda la infraestructura
@@ -177,10 +182,18 @@ Esto hace, en orden:
 `deploy.sh` cumple doble función: la primera vez **crea** los recursos, y en corridas posteriores **actualiza** cualquier cambio en el código (por ejemplo, si se modifica `main.py` del consumidor o `schema.sql`, Terraform detecta el cambio por hash y vuelve a aplicar solo lo necesario) — es el mismo comando para desplegar y para actualizar.
 
 > **Nota — "Already Exists" al desplegar desde una máquina nueva**: como el estado de Terraform (`terraform.tfstate`) hoy es local a cada máquina, si alguien ya desplegó estos recursos desde otra computadora, tu `apply` puede fallar con errores `409: Already Exists`. Se soluciona importando el recurso al estado local antes de repetir el `apply`, por ejemplo:
+>
 > ```bash
 > cd Infrastructure
 > terraform import google_bigquery_dataset.raw projects/neobanx-fraud-detection/datasets/raw
+> terraform import google_sql_database_instance.transaccional neobanx-fraud-detection/neobanx-transaccional
+> terraform import google_sql_user.postgres neobanx-fraud-detection/neobanx-transaccional/postgres
+> terraform import google_pubsub_topic.transacciones projects/neobanx-fraud-detection/topics/transacciones-neobanx
+> terraform import google_pubsub_subscription.transacciones_sub projects/neobanx-fraud-detection/subscriptions/transacciones-neobanx-sub
 > ```
+>
+> Corre `terraform plan` después de cada import y ajusta el HCL si aparece algún diff inesperado antes de aplicar — nunca hagas `apply` a ciegas sobre un recurso recién importado.
+>
 > *Plan de remediación*: migrar a un backend remoto de Terraform (bucket de GCS compartido) para que todo el equipo use el mismo estado y este paso deje de ser necesario.
 
 ### Paso 5 — Destruir toda la infraestructura (cuando termines de trabajar)
@@ -193,10 +206,13 @@ Esto hace, en orden:
 Elimina todo lo gestionado por este Terraform, para no dejar recursos consumiendo créditos educativos.
 
 > **Nota — Cloud SQL cobra por tiempo activo**, no solo por uso real: si no vas a destruir toda la infraestructura pero sí terminaste de trabajar por el día, apaga solo la instancia:
+>
 > ```bash
 > gcloud sql instances patch neobanx-transaccional --activation-policy=NEVER --project=neobanx-fraud-detection
 > ```
+>
 > Y para volver a prenderla antes de trabajar:
+>
 > ```bash
 > gcloud sql instances patch neobanx-transaccional --activation-policy=ALWAYS --project=neobanx-fraud-detection
 > ```
@@ -213,7 +229,7 @@ chmod +x scripts/bootstrap.sh scripts/deploy.sh scripts/destroy.sh
 ./scripts/deploy.sh --yes
 ```
 
-> **Nota de alcance**: el tópico de Pub/Sub y la instancia de Cloud SQL (`neobanx-transaccional`) se aprovisionaron en el Sprint 0 y este Terraform los referencia (`data` sources), no los vuelve a crear. Esto está documentado como excepción en la sección "Procesos manuales" más abajo.
+> **Nota de alcance**: el tópico de Pub/Sub y la instancia de Cloud SQL (`neobanx-transaccional`) se aprovisionaron originalmente a mano en el Sprint 0; desde Sprint 1 este Terraform los gestiona como `resource` propios (los crea, actualiza y destruye), así que un proyecto GCP nuevo no necesita nada preexistente para desplegar.
 
 ## Cómo correr el generador de streaming
 
@@ -272,26 +288,23 @@ Si aparecen filas nuevas con `veredicto` en `aprobada`/`alerta`, el pipeline gen
 
 ## DDL, generadores, modelos, pipelines y pruebas
 
-| Elemento | Ubicación |
-|---|---|
-| DDL del modelo transaccional | `Infrastructure/schema.sql` (tablas `clientes`, `transacciones`, `alertas`) |
-| Esquema de la capa analítica (BigQuery) | `Infrastructure/main.tf` → `google_bigquery_table.transacciones_raw` |
-| Generador de datos (streaming) | `Backend/generador/main.py` |
-| Consumidor / modelo baseline de detección | `Backend/consumidor/main.py` (función `calcular_veredicto`) |
-| Pipeline de infraestructura completo | `Infrastructure/main.tf` |
-| Frontend / demo | `Frontend/app.py` |
-| Pruebas funcionales realizadas | Manuales, con casos de control conocidos (ver `Infrastructure/README.md`: mensajes `test_veredicto_ok` / `test_veredicto_alerta` verificados en BigQuery) |
-| Pruebas automatizadas | No implementadas en Sprint 1 — planificadas para Sprint 2 (GitHub Actions) |
+| Elemento                                   | Ubicación                                                                                                                                                     |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DDL del modelo transaccional               | `Infrastructure/schema.sql` (tablas `clientes`, `transacciones`, `alertas`)                                                                            |
+| Esquema de la capa analítica (BigQuery)   | `Infrastructure/main.tf` → `google_bigquery_table.transacciones_raw`                                                                                      |
+| Generador de datos (streaming)             | `Backend/generador/main.py`                                                                                                                                  |
+| Consumidor / modelo baseline de detección | `Backend/consumidor/main.py` (función `calcular_veredicto`)                                                                                               |
+| Pipeline de infraestructura completo       | `Infrastructure/main.tf`                                                                                                                                     |
+| Frontend / demo                            | `Frontend/app.py`                                                                                                                                            |
+| Pruebas funcionales realizadas             | Manuales, con casos de control conocidos (ver`Infrastructure/README.md`: mensajes `test_veredicto_ok` / `test_veredicto_alerta` verificados en BigQuery) |
+| Pruebas automatizadas                      | No implementadas en Sprint 1 — planificadas para Sprint 2 (GitHub Actions)                                                                                    |
 
 ## Procesos manuales identificados y justificados
 
-- **Aprovisionamiento inicial de Pub/Sub y de la instancia de Cloud SQL**: se crearon en el Sprint 0, antes de adoptar la política estricta de "todo vía Terraform" del Sprint 1. Este `main.tf` los referencia como recursos existentes (`data` sources) en vez de recrearlos. *Plan de remediación*: incorporar su creación a Terraform (`google_pubsub_topic`, `google_sql_database_instance` como `resource`, no `data`) en Sprint 2, o documentar formalmente como infraestructura base fuera del ciclo de vida gestionado.
-
-- **Autorización de red `0.0.0.0/0` en Cloud SQL**: para que Terraform (vía `psql`) y el equipo pudieran conectarse a la instancia y aplicar `schema.sql`, se autorizó temporalmente el acceso desde cualquier IP en la consola de GCP, una única vez.
-  *Por qué se hizo manual*: automatizarlo con IPs dinámicas por integrante o Cloud SQL Auth Proxy requería tiempo adicional no disponible en el Sprint 1.
+- **Autorización de red `0.0.0.0/0` en Cloud SQL**: para que Terraform (vía `psql`) y el equipo pudieran conectarse a la instancia y aplicar `schema.sql`, se autorizó el acceso desde cualquier IP — ahora declarado como `authorized_networks` dentro del propio `main.tf` (ya no es un paso manual en consola), pero el riesgo de seguridad de tener `0.0.0.0/0` abierto sigue siendo el mismo.
+  *Por qué se aceptó este riesgo*: automatizar IPs dinámicas por integrante o un Cloud SQL Auth Proxy requería tiempo adicional no disponible en el Sprint 1.
   *Riesgo aceptado*: la instancia solo contiene datos sintéticos de prueba.
   *Plan de remediación (Sprint 2)*: Cloud SQL Auth Proxy o restricción a IPs específicas del equipo, gestionado vía Terraform.
-
 - **Estado de Terraform (`terraform.tfstate`) local a cada máquina**: al ser un repo de equipo, cada integrante que corre `deploy.sh` desde su propia computadora mantiene su propia copia local del estado, lo que puede producir errores `409: Already Exists` si el recurso ya fue creado desde otra máquina (ver nota en la sección "Scripts de reproducibilidad").
   *Por qué se hizo así*: para el Sprint 1 se priorizó tener el pipeline funcionando end-to-end sobre configurar infraestructura de estado remoto.
   *Plan de remediación (Sprint 2)*: backend remoto de Terraform sobre un bucket de Google Cloud Storage (GCS), compartido por todo el equipo, con bloqueo de estado para evitar que dos personas apliquen cambios al mismo tiempo.
@@ -300,15 +313,15 @@ Ningún otro recurso (BigQuery, Cloud Function, Cloud Run, IAM, APIs habilitadas
 
 ## Decisiones técnicas y trade-offs
 
-| Decisión | Elegido | Por qué |
-|---|---|---|
-| Procesamiento | Streaming (transacciones) + batch de apoyo (perfil cliente) | SLA de detección < 5s; el perfil de cliente cambia poco |
-| Capa transaccional | SQL — Cloud SQL (PostgreSQL) | ACID e integridad referencial para operaciones financieras |
-| Capa analítica | Data Warehouse — BigQuery | Particionamiento y consultas rápidas sin gestionar infraestructura |
-| Perfil de cliente | Clave-valor — Redis/Memorystore (Sprint 2) | Lecturas de baja latencia durante el streaming |
-| Cómputo | Serverless (Cloud Functions, Cloud Run) | Menor complejidad operativa y costo, escalado automático |
-| Infraestructura | Terraform (IaC) | Reproducibilidad total, mínimos pasos manuales |
-| Modelo de detección (Sprint 1) | Regla baseline (monto + categoría) | Punto de partida rápido y explicable; modelo de ML real planificado para Sprint 2 |
+| Decisión                       | Elegido                                                     | Por qué                                                                           |
+| ------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Procesamiento                   | Streaming (transacciones) + batch de apoyo (perfil cliente) | SLA de detección < 5s; el perfil de cliente cambia poco                           |
+| Capa transaccional              | SQL — Cloud SQL (PostgreSQL)                               | ACID e integridad referencial para operaciones financieras                         |
+| Capa analítica                 | Data Warehouse — BigQuery                                  | Particionamiento y consultas rápidas sin gestionar infraestructura                |
+| Perfil de cliente               | Clave-valor — Redis/Memorystore (Sprint 2)                 | Lecturas de baja latencia durante el streaming                                     |
+| Cómputo                        | Serverless (Cloud Functions, Cloud Run)                     | Menor complejidad operativa y costo, escalado automático                          |
+| Infraestructura                 | Terraform (IaC)                                             | Reproducibilidad total, mínimos pasos manuales                                    |
+| Modelo de detección (Sprint 1) | Regla baseline (monto + categoría)                         | Punto de partida rápido y explicable; modelo de ML real planificado para Sprint 2 |
 
 **Seguridad**: PII tokenizada (hash HMAC determinístico) antes de salir de la capa transaccional · acceso a Cloud SQL con SSL obligatorio · secretos nunca en el repositorio.
 
@@ -336,12 +349,12 @@ Resultado del perfilamiento completo del dataset base, en `Documentation/`:
 
 ## KPIs y SLAs
 
-| Pregunta de Negocio | KPI | SLA Técnico |
-|---|---|---|
-| ¿Detectamos el fraude a tiempo? | % de transacciones fraudulentas detectadas en tiempo real | Latencia del pipeline < 5 segundos |
-| ¿Cuántos clientes buenos bloqueamos por error? | % de falsos positivos | Precisión de las reglas de detección |
-| ¿Qué operación es más riesgosa? | Ranking de operaciones por tasa de fraude | Tiempo de respuesta del dashboard < 5 segundos |
-| ¿Los datos son confiables? | % de transacciones con datos completos | Completitud de datos > 95% |
+| Pregunta de Negocio                              | KPI                                                       | SLA Técnico                                   |
+| ------------------------------------------------ | --------------------------------------------------------- | ---------------------------------------------- |
+| ¿Detectamos el fraude a tiempo?                 | % de transacciones fraudulentas detectadas en tiempo real | Latencia del pipeline < 5 segundos             |
+| ¿Cuántos clientes buenos bloqueamos por error? | % de falsos positivos                                     | Precisión de las reglas de detección         |
+| ¿Qué operación es más riesgosa?              | Ranking de operaciones por tasa de fraude                 | Tiempo de respuesta del dashboard < 5 segundos |
+| ¿Los datos son confiables?                      | % de transacciones con datos completos                    | Completitud de datos > 95%                     |
 
 ## Metodología
 
@@ -349,12 +362,12 @@ Cadencia ágil (Scrum) apoyada en CRISP-DM (comprensión del dominio y los datos
 
 ## Cronograma
 
-| Sprint | Semanas | Entregable |
-|---|---|---|
-| Sprint 0 | 1 – 3 | Propuesta de proyecto |
+| Sprint             | Semanas          | Entregable                                                    |
+| ------------------ | ---------------- | ------------------------------------------------------------- |
+| Sprint 0           | 1 – 3           | Propuesta de proyecto                                         |
 | **Sprint 1** | **4 – 7** | **Producto Alfa (Walking Skeleton) — este entregable** |
-| Sprint 2 | 8 – 15 | Producto Beta (modelado + gobernanza) |
-| Sprint Final | 16 – 17 | Producto Final (dashboard + sustentación) |
+| Sprint 2           | 8 – 15          | Producto Beta (modelado + gobernanza)                         |
+| Sprint Final       | 16 – 17         | Producto Final (dashboard + sustentación)                    |
 
 ## Alcance
 

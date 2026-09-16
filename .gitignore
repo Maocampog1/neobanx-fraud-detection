@@ -1,7 +1,8 @@
 # Terraform
 .terraform/
 *.tfstate
-*.tfstate.backup
+*.tfstate.*
+*.bak
 terraform.tfvars
 
 # Datos

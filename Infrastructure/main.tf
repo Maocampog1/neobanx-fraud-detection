@@ -48,6 +48,16 @@ resource "google_project_service" "artifactregistry" {
   disable_on_destroy = false
 }
 
+resource "google_project_service" "sqladmin" {
+  service            = "sqladmin.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_project_service" "pubsub" {
+  service            = "pubsub.googleapis.com"
+  disable_on_destroy = false
+}
+
 # --- BigQuery: capa Raw ---
 
 resource "google_bigquery_dataset" "raw" {
@@ -80,19 +90,103 @@ resource "google_bigquery_table" "transacciones_raw" {
   ])
 }
 
-# --- Cloud SQL: base de datos lógica + tablas ---
+# --- Cloud SQL: instancia + base de datos lógica + tablas ---
 
-data "google_sql_database_instance" "transaccional" {
-  name = "neobanx-transaccional"
+resource "google_sql_database_instance" "transaccional" {
+  name                = "neobanx-transaccional"
+  database_version    = "POSTGRES_18"
+  region              = var.region
+  deletion_protection = false
+
+  depends_on = [google_project_service.sqladmin]
+
+  settings {
+    tier              = "db-custom-2-8192"
+    edition           = "ENTERPRISE"
+    availability_type = "ZONAL"
+    activation_policy = "NEVER"
+
+    disk_size       = 10
+    disk_type       = "PD_SSD"
+    disk_autoresize = true
+
+    deletion_protection_enabled = false
+    enable_dataplex_integration = true
+    retain_backups_on_delete    = true
+
+    ip_configuration {
+      ipv4_enabled = true
+      ssl_mode     = "ENCRYPTED_ONLY"
+
+      authorized_networks {
+        name  = "maria-local"
+        value = "0.0.0.0/0"
+      }
+    }
+
+    backup_configuration {
+      enabled                        = true
+      location                       = "us"
+      start_time                     = "12:00"
+      point_in_time_recovery_enabled = true
+      transaction_log_retention_days = 7
+
+      backup_retention_settings {
+        retained_backups = 7
+        retention_unit   = "COUNT"
+      }
+    }
+
+    database_flags {
+      name  = "cloudsql.iam_authentication"
+      value = "on"
+    }
+
+    password_validation_policy {
+      enable_password_policy      = true
+      complexity                  = "COMPLEXITY_DEFAULT"
+      disallow_username_substring = true
+      min_length                  = 8
+      reuse_interval              = 0
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [settings[0].disk_size]
+  }
+}
+
+resource "google_sql_user" "postgres" {
+  name            = "postgres"
+  instance        = google_sql_database_instance.transaccional.name
+  deletion_policy = "ABANDON"
+
+  depends_on = [google_sql_database_instance.transaccional]
+}
+
+# El provider de Terraform gestiona la contraseña de usuarios Postgres conectándose
+# directo a la base (proxy local en 127.0.0.1:5432), lo cual no está disponible en
+# todos los entornos. Se fija vía el API de Cloud SQL Admin directamente en su lugar.
+resource "null_resource" "set_postgres_password" {
+  depends_on = [google_sql_user.postgres]
+
+  triggers = {
+    password_hash = sha256(var.db_password)
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["PowerShell", "-Command"]
+    command     = "gcloud sql users set-password postgres --instance=${google_sql_database_instance.transaccional.name} --password=\"${var.db_password}\" --project=${var.project_id}"
+  }
 }
 
 resource "google_sql_database" "neobanx" {
   name     = "neobanx"
-  instance = data.google_sql_database_instance.transaccional.name
+  instance = google_sql_database_instance.transaccional.name
 }
 
 resource "null_resource" "aplicar_schema" {
-  depends_on = [google_sql_database.neobanx]
+  depends_on = [google_sql_database.neobanx, null_resource.set_postgres_password]
 
   triggers = {
     schema_hash = filesha256("${path.module}/schema.sql")
@@ -103,8 +197,25 @@ resource "null_resource" "aplicar_schema" {
     environment = {
       PGPASSWORD = var.db_password
     }
-    command = "psql -h ${data.google_sql_database_instance.transaccional.public_ip_address} -p 5432 -U postgres -d ${google_sql_database.neobanx.name} --set=sslmode=require -f schema.sql"
+    command = "psql -h ${google_sql_database_instance.transaccional.public_ip_address} -p 5432 -U postgres -d ${google_sql_database.neobanx.name} --set=sslmode=require -f schema.sql"
   }
+}
+
+# --- Pub/Sub: tópico de transacciones + suscripción de prueba manual ---
+
+resource "google_pubsub_topic" "transacciones" {
+  name = "transacciones-neobanx"
+
+  depends_on = [google_project_service.pubsub]
+}
+
+resource "google_pubsub_subscription" "transacciones_sub" {
+  name  = "transacciones-neobanx-sub"
+  topic = google_pubsub_topic.transacciones.name
+
+  ack_deadline_seconds = 10
+
+  depends_on = [google_pubsub_topic.transacciones]
 }
 
 # --- Consumidor: Cloud Function conectada a Pub/Sub ---
@@ -165,7 +276,7 @@ resource "google_cloudfunctions2_function" "consumidor" {
   event_trigger {
     trigger_region = var.region
     event_type     = "google.cloud.pubsub.topic.v1.messagePublished"
-    pubsub_topic   = "projects/${var.project_id}/topics/transacciones-neobanx"
+    pubsub_topic   = google_pubsub_topic.transacciones.id
     retry_policy   = "RETRY_POLICY_RETRY"
   }
 }
