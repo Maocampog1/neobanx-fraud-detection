@@ -1,2 +1,6 @@
 16 de septiembre:
 
+sh ./scripts/bootstrap.sh
+==> .env encontrado, cargándolo...
+==> Verificando herramientas requeridas...
+ERROR: 'psql' no está instalado o no está en el PATH.
