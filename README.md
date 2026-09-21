@@ -44,7 +44,7 @@ La tabla de arriba es la arquitectura objetivo del proyecto completo. Esto es lo
 
 | Componente                                                | Estado                                                                                      |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Generador (Backend/generador/) — CSV Sparkov a Pub/Sub   | Construido y probado end-to-end contra el proyecto real                                     |
+| Generador (Backend/generador/) — CSV Sparkov a Pub/Sub   | Construido y probado end-to-end; dockerizado y desplegado como Cloud Run Job vía Terraform, CSV auto-descargado desde bucket público (sin pasos manuales) |
 | Cloud Function consumidor — Pub/Sub a BigQuery Raw       | Desplegada, incluye regla baseline de veredicto (aprobada/alerta)                           |
 | BigQuery Raw (raw.transacciones_raw)                      | Desplegado vía Terraform, particionado por fecha                                           |
 | Cloud SQL (esquema clientes/transacciones/alertas)        | Esquema desplegado; sin datos reales de clientes cargados aún                              |
@@ -63,17 +63,21 @@ neobanx-fraud-detection/
 ├── .env.example                       Plantilla de .env — SÍ se versiona
 ├── .gitignore
 ├── .gitattributes                     Normaliza saltos de línea (LF) en .sh y .env
+├── GUIA_DESPLIEGUE.md                 Paso a paso corto: clonar -> desplegar -> ver transacciones
 ├── scripts/
 │   ├── bootstrap.sh                   Crea .env, autentica gcloud, genera terraform.tfvars
 │   ├── deploy.sh                      Despliega toda la infraestructura definida en Terraform
-│   └── destroy.sh                     Destruye toda la infraestructura definida en Terraform
+│   ├── destroy.sh                     Destruye toda la infraestructura definida en Terraform
+│   └── test.sh                        Prueba funcional: corre el generador acotado y verifica BigQuery
 ├── Backend/
 │   ├── generador/                    Lee fraudTrain.csv y publica a Pub/Sub (Juanes)
-│   │   ├── main.py                   Limpieza, orden cronologico, hash de PII, publish
+│   │   ├── main.py                   Descarga el CSV si falta, limpieza, orden cronologico, hash de PII, publish
 │   │   ├── holidays.py               Integracion Nager.Date (festivos en Colombia)
 │   │   ├── explorar_fraude.py        Utilidad para encontrar ventanas densas en fraude
+│   │   ├── Dockerfile                Imagen para correrlo como Cloud Run Job
+│   │   ├── .gcloudignore             Evita subir el CSV local al construir la imagen
 │   │   ├── requirements.txt
-│   │   └── data/                     fraudTrain.csv va aqui - NO se sube al repo (.gitignore)
+│   │   └── data/                     fraudTrain.csv va aqui si corres local - NO se sube al repo (.gitignore)
 │   ├── consumidor/                   Cloud Function: Pub/Sub -> BigQuery Raw (Maria)
 │   │   ├── main.py                   Inserta cada mensaje + calcula el veredicto baseline
 │   │   └── requirements.txt
@@ -85,21 +89,22 @@ neobanx-fraud-detection/
 │   ├── requirements.txt
 │   └── README.md
 ├── Infrastructure/                   Todo lo que gestiona Terraform (Maria)
-│   ├── main.tf                       BigQuery, esquema Cloud SQL, Cloud Function, Cloud Run
-│   ├── variables.tf                  project_id, region, db_password (sensible)
+│   ├── main.tf                       BigQuery, Cloud SQL, Pub/Sub, Cloud Function, Cloud Run (frontend + generador)
+│   ├── variables.tf                  project_id, region, db_password, generator_salt (sensibles), dataset_url
 │   ├── schema.sql                    DDL: tablas clientes / transacciones / alertas
 │   ├── terraform.tfvars.example      Plantilla de terraform.tfvars — SÍ se versiona
 │   ├── terraform.tfvars              Valores reales, generado por bootstrap.sh (.gitignore)
 │   └── README.md                     Requisitos, secretos, recursos, estado del despliegue
-├── Documentation/                    Gobernanza y calidad de datos (Camilo)
+├── Documentation/                    Gobernanza y calidad de datos (Camilo) + guías técnicas
 │   ├── Diccionario datos.md
 │   ├── hallazgos_profiling_fase2.md
 │   ├── reglas_calidad_neobanx.md
-│   └── perfilamiento_neobanx.ipynb
+│   ├── perfilamiento_neobanx.ipynb
+│   └── docker_terraform_explicado.md Que es Docker/gcloud/Terraform y que cambio en la dockerizacion
 └── README.md                         Este archivo
 ```
 
-Cada carpeta con código tiene su propio README.md con el detalle — este archivo es el mapa general, no repite lo que ya está explicado ahí.
+Cada carpeta con código tiene su propio README.md con el detalle — este archivo es el mapa general, no repite lo que ya está explicado ahí. Para un paso a paso operativo corto, ver [`GUIA_DESPLIEGUE.md`](GUIA_DESPLIEGUE.md).
 
 ## Scripts de reproducibilidad
 
@@ -224,10 +229,13 @@ git clone <url-del-repo>
 cd neobanx-fraud-detection
 cp .env.example .env
 # editar .env con los valores reales del equipo
-chmod +x scripts/bootstrap.sh scripts/deploy.sh scripts/destroy.sh
+chmod +x scripts/bootstrap.sh scripts/deploy.sh scripts/destroy.sh scripts/test.sh
 ./scripts/bootstrap.sh
 ./scripts/deploy.sh --yes
+./scripts/test.sh   # prueba funcional: corre el generador acotado y verifica BigQuery
 ```
+
+Ver [`GUIA_DESPLIEGUE.md`](GUIA_DESPLIEGUE.md) para el detalle de cada paso, incluyendo cómo ver las transacciones resultantes.
 
 > **Nota de alcance**: el tópico de Pub/Sub y la instancia de Cloud SQL (`neobanx-transaccional`) se aprovisionaron originalmente a mano en el Sprint 0; desde Sprint 1 este Terraform los gestiona como `resource` propios (los crea, actualiza y destruye), así que un proyecto GCP nuevo no necesita nada preexistente para desplegar.
 
@@ -297,7 +305,7 @@ Si aparecen filas nuevas con `veredicto` en `aprobada`/`alerta`, el pipeline gen
 | Pipeline de infraestructura completo       | `Infrastructure/main.tf`                                                                                                                                     |
 | Frontend / demo                            | `Frontend/app.py`                                                                                                                                            |
 | Pruebas funcionales realizadas             | Manuales, con casos de control conocidos (ver`Infrastructure/README.md`: mensajes `test_veredicto_ok` / `test_veredicto_alerta` verificados en BigQuery) |
-| Pruebas automatizadas                      | No implementadas en Sprint 1 — planificadas para Sprint 2 (GitHub Actions)                                                                                    |
+| Pruebas automatizadas                      | `scripts/test.sh` — corre el generador (Cloud Run Job) en una ventana acotada y verifica en BigQuery que las filas llegaron con veredicto; integración con CI (GitHub Actions) sigue planificada para Sprint 2 |
 
 ## Procesos manuales identificados y justificados
 

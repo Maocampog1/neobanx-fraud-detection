@@ -64,9 +64,10 @@ gcloud config set project "${GCP_PROJECT_ID}"
 # --- Paso 5: generar Infrastructure/terraform.tfvars a partir de .env ---
 echo "==> Generando Infrastructure/terraform.tfvars..."
 cat > "${ROOT_DIR}/Infrastructure/terraform.tfvars" <<TFVARS
-project_id  = "${GCP_PROJECT_ID}"
-region      = "${GCP_REGION}"
-db_password = "${DB_PASSWORD}"
+project_id     = "${GCP_PROJECT_ID}"
+region         = "${GCP_REGION}"
+db_password    = "${DB_PASSWORD}"
+generator_salt = "${GENERATOR_SALT}"
 TFVARS
 
 echo ""

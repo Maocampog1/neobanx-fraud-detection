@@ -7,6 +7,7 @@ import os
 import time
 
 import pandas as pd
+import requests
 from google.cloud import pubsub_v1
 
 from holidays import es_festivo
@@ -16,6 +17,13 @@ TOPIC_ID = os.environ.get("TOPIC_ID", "transacciones-neobanx")
 CSV_PATH = os.environ.get(
     "CSV_PATH", os.path.join(os.path.dirname(__file__), "data", "fraudTrain.csv")
 )
+# CSV publicado una sola vez por el equipo en un bucket publico -- asi
+# cualquiera que reproduzca el repo (incluso en un proyecto GCP nuevo) no
+# necesita descargarlo a mano de Kaggle.
+DATASET_URL = os.environ.get(
+    "DATASET_URL",
+    "https://storage.googleapis.com/neobanx-fraud-detection-datasets/fraudTrain.csv",
+)
 INTERVALO_SEGUNDOS = float(os.environ.get("INTERVALO_SEGUNDOS", "4"))
 SALT = os.environ["GENERATOR_SALT"]
 
@@ -24,6 +32,10 @@ SALT = os.environ["GENERATOR_SALT"]
 MAX_FILAS = os.environ.get("MAX_FILAS")
 FECHA_INICIO = os.environ.get("FECHA_INICIO")  # ej. "2019-01-01"
 FECHA_FIN = os.environ.get("FECHA_FIN")  # ej. "2019-01-02"
+
+# Filas por bloque al leer el CSV -- evita cargar el archivo completo
+# (~350MB) en memoria de una sola vez.
+CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "50000"))
 
 COLUMNAS_CONTRATO = [
     "trans_num",
@@ -94,21 +106,68 @@ def limpiar_datos(df: pd.DataFrame) -> pd.DataFrame:
     return sin_duplicados
 
 
-def acotar_rango(df: pd.DataFrame) -> pd.DataFrame:
-    if FECHA_INICIO:
-        df = df[df["trans_date_trans_time"] >= pd.Timestamp(FECHA_INICIO)]
-    if FECHA_FIN:
-        df = df[df["trans_date_trans_time"] < pd.Timestamp(FECHA_FIN)]
-    if MAX_FILAS:
-        df = df.head(int(MAX_FILAS))
-    return df.reset_index(drop=True)
+def cargar_transacciones(csv_path: str) -> pd.DataFrame:
+    """Lee el CSV por bloques en vez de cargarlo completo en memoria.
+
+    Si FECHA_INICIO/FECHA_FIN estan definidas, cada bloque se filtra antes
+    de acumularlo -- la memoria pico depende del tamano de un bloque
+    (CHUNK_SIZE filas), no del archivo completo (1.29M filas / 350MB).
+    Sin fechas definidas esto termina acumulando el dataset completo de
+    todas formas -- correr sin acotar solo tiene sentido en local, nunca en
+    el Cloud Run Job (ver Infrastructure/README.md).
+    """
+    fecha_inicio_ts = pd.Timestamp(FECHA_INICIO) if FECHA_INICIO else None
+    fecha_fin_ts = pd.Timestamp(FECHA_FIN) if FECHA_FIN else None
+
+    bloques = []
+    lector = pd.read_csv(csv_path, parse_dates=["trans_date_trans_time"], chunksize=CHUNK_SIZE)
+    for bloque in lector:
+        if fecha_inicio_ts is not None:
+            bloque = bloque[bloque["trans_date_trans_time"] >= fecha_inicio_ts]
+        if fecha_fin_ts is not None:
+            bloque = bloque[bloque["trans_date_trans_time"] < fecha_fin_ts]
+        if not bloque.empty:
+            bloques.append(bloque)
+
+    if not bloques:
+        return pd.read_csv(csv_path, nrows=0)
+    return pd.concat(bloques, ignore_index=True)
+
+
+def descargar_csv_si_falta(url: str, destino: str) -> None:
+    """Descarga el CSV publico a `destino` si aun no existe localmente.
+
+    Streaming (no carga el archivo completo en memoria) y escritura atomica
+    (descarga a un archivo temporal y lo renombra al final) para que una
+    descarga interrumpida a medias no quede confundida con un archivo valido
+    en el proximo arranque.
+    """
+    if os.path.exists(destino):
+        print(f"CSV ya presente en {destino}, se omite la descarga")
+        return
+
+    os.makedirs(os.path.dirname(destino) or ".", exist_ok=True)
+    tmp_destino = f"{destino}.part"
+    print(f"CSV no encontrado en {destino}; descargando desde {url}...")
+
+    with requests.get(url, stream=True, timeout=30) as resp:
+        resp.raise_for_status()
+        with open(tmp_destino, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+
+    os.replace(tmp_destino, destino)
+    print(f"Descarga completa: {destino}")
 
 
 def main():
-    df = pd.read_csv(CSV_PATH, parse_dates=["trans_date_trans_time"])
+    descargar_csv_si_falta(DATASET_URL, CSV_PATH)
+    df = cargar_transacciones(CSV_PATH)
     df = limpiar_datos(df)
     df = df.sort_values("trans_date_trans_time").reset_index(drop=True)
-    df = acotar_rango(df)
+    if MAX_FILAS:
+        df = df.head(int(MAX_FILAS)).reset_index(drop=True)
     print(f"{len(df)} transacciones a publicar desde {CSV_PATH}, ordenadas por trans_date_trans_time")
 
     for _, fila in df.iterrows():

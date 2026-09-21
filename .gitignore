@@ -3,6 +3,7 @@
 *.tfstate
 *.tfstate.*
 *.bak
+tfplan
 terraform.tfvars
 
 # Datos
@@ -17,3 +18,6 @@ Infrastructure/consumidor.zip
 
 #env
 .env
+
+# Claude Code (estado local de la herramienta, no del proyecto)
+.claude/

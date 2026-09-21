@@ -96,17 +96,19 @@ Nada de esto vive en el repo (verificado, sin credenciales reales commiteadas):
 - Bucket de Cloud Storage + objeto con el código zippeado del consumidor
 - Cloud Function v2 `consumidor` (trigger de Pub/Sub)
 - Repositorio de Artifact Registry + imagen Docker del frontend (build en Cloud Build) + servicio de Cloud Run `neobanx-demo` + su binding público de IAM
+- Repositorio de Artifact Registry + imagen Docker del generador (build en Cloud Build) + Cloud Run Job `neobanx-generador` (definido pero no se ejecuta automáticamente — ver `Backend/README.md`)
 
-Todo lo anterior se crea desde cero en cualquier proyecto GCP nuevo — no depende de recursos preexistentes.
+Todo lo anterior se crea desde cero en cualquier proyecto GCP nuevo — no depende de recursos preexistentes. Ver [`Documentation/docker_terraform_explicado.md`](../Documentation/docker_terraform_explicado.md) para el detalle de cómo funciona la dockerización.
 
 ## Excepciones de configuración manual
 
-Solo queda un paso genuinamente manual, sin relación con el aprovisionamiento de infraestructura:
+Quedan dos pasos genuinamente manuales:
 
 | Qué se hizo a mano | Por qué | Cómo verificarlo |
 |---|---|---|
 | Un registro de prueba en `clientes` se insertó a mano vía `psql`, no vía `schema.sql` (que solo crea tablas vacías) | Validar que el esquema y la llave foránea funcionan antes de que existiera el generador | `SELECT * FROM clientes;` desde Cloud Shell — 1 fila con `cc_num_hash = 'abc123hash'` (valor de prueba, no un hash real) |
 | Encender/apagar la instancia de Cloud SQL (`gcloud sql instances patch --activation-policy`) | Ahorrar créditos cuando nadie la está usando — conveniencia opcional, no hace falta para que `deploy.sh`/`destroy.sh` funcionen | `gcloud sql instances describe neobanx-transaccional --format="value(state)"` |
+| Subir `fraudTrain.csv` una sola vez a `gs://neobanx-fraud-detection-datasets` (bucket público) | Terraform no debe ser dueño del contenido de un archivo de 350MB; es un paso del **equipo**, no de terceros — cualquiera que reproduzca el repo (incluido el profesor) ya descarga el CSV automáticamente desde ese bucket público, sin hacer nada manual | `curl -I https://storage.googleapis.com/neobanx-fraud-detection-datasets/fraudTrain.csv` debe responder `200 OK` |
 
 ## Cómo desplegar desde cero (100% reproducible, incluso en un proyecto GCP vacío)
 

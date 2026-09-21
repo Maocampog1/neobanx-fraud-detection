@@ -334,6 +334,75 @@ resource "google_cloud_run_v2_service_iam_member" "frontend_public" {
   member   = "allUsers"
 }
 
+# --- Generador: streaming del CSV a Pub/Sub, como Cloud Run Job ---
+# Reutiliza las APIs ya habilitadas en google_project_service.run_frontend_deps
+# (artifactregistry, cloudbuild, run).
+
+resource "google_artifact_registry_repository" "backend" {
+  location      = var.region
+  repository_id = "backend"
+  format        = "DOCKER"
+
+  depends_on = [google_project_service.run_frontend_deps]
+}
+
+resource "null_resource" "build_generador_image" {
+  triggers = {
+    main_hash       = filesha256("${path.module}/../Backend/generador/main.py")
+    holidays_hash   = filesha256("${path.module}/../Backend/generador/holidays.py")
+    dockerfile_hash = filesha256("${path.module}/../Backend/generador/Dockerfile")
+  }
+
+  provisioner "local-exec" {
+    working_dir = "${path.module}/../Backend/generador"
+    command      = "gcloud builds submit --tag ${var.region}-docker.pkg.dev/${var.project_id}/backend/neobanx-generador:latest --project=${var.project_id}"
+  }
+
+  depends_on = [google_artifact_registry_repository.backend]
+}
+
+# Define el Job pero no lo ejecuta -- una corrida sin acotar tomaria ~60 dias
+# y ademas supera el limite maximo de 24h por tarea de Cloud Run Jobs. Correr
+# una ventana acotada es una accion aparte (ver scripts/test.sh).
+resource "google_cloud_run_v2_job" "generador" {
+  name                = "neobanx-generador"
+  location            = var.region
+  deletion_protection = false
+
+  depends_on = [null_resource.build_generador_image]
+
+  template {
+    parallelism = 1
+    task_count  = 1
+
+    template {
+      max_retries = 0
+      timeout     = "3600s"
+
+      containers {
+        image = "${var.region}-docker.pkg.dev/${var.project_id}/backend/neobanx-generador:latest"
+
+        env {
+          name  = "PROJECT_ID"
+          value = var.project_id
+        }
+        env {
+          name  = "TOPIC_ID"
+          value = google_pubsub_topic.transacciones.name
+        }
+        env {
+          name  = "GENERATOR_SALT"
+          value = var.generator_salt
+        }
+        env {
+          name  = "DATASET_URL"
+          value = var.dataset_url
+        }
+      }
+    }
+  }
+}
+
 output "frontend_url" {
   value = google_cloud_run_v2_service.frontend.uri
 }
