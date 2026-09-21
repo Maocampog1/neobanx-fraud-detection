@@ -46,8 +46,8 @@ Componentes ya provisionados y probados end-to-end:
 | Componente | Estado | Evidencia |
 |---|---|---|
 | Proyecto GCP + billing + IAM | ✅ Desplegado | Sprint 0 |
-| Pub/Sub `transacciones-neobanx` | ✅ Desplegado | Sprint 0 |
-| Cloud SQL `neobanx-transaccional` (PostgreSQL) | ✅ Desplegado | Sprint 0 |
+| Pub/Sub `transacciones-neobanx` | ✅ Desplegado vía Terraform | Creado originalmente en Sprint 0, migrado a `resource` de Terraform en Sprint 1 |
+| Cloud SQL `neobanx-transaccional` (PostgreSQL) | ✅ Desplegado vía Terraform | Creado originalmente en Sprint 0, migrado a `resource` de Terraform en Sprint 1 |
 | BigQuery dataset `raw` + tabla `transacciones_raw` (particionada por `trans_date_trans_time`) | ✅ Desplegado vía Terraform | Captura BigQuery Studio |
 | Esquema Cloud SQL: `clientes`, `transacciones`, `alertas` | ✅ Desplegado vía Terraform (`schema.sql`) | `\dt` en psql, integridad referencial probada con FK |
 | Registros de prueba en Cloud SQL | ✅ Insertados y validados con JOIN entre las 3 tablas | Consulta en psql |
@@ -89,26 +89,28 @@ Nada de esto vive en el repo (verificado, sin credenciales reales commiteadas):
 
 ## Recursos que crea este Terraform
 
-- 5 APIs habilitadas: Cloud Functions, Cloud Build, Cloud Run, Eventarc, Artifact Registry
+- 7 APIs habilitadas: Cloud Functions, Cloud Build, Cloud Run, Eventarc, Artifact Registry, Cloud SQL Admin, Pub/Sub
 - Dataset + tabla de BigQuery (`raw.transacciones_raw`, particionada por fecha)
-- Base de datos `neobanx` dentro de la instancia de Cloud SQL (ver excepción abajo — la instancia en sí no la crea este Terraform) + su esquema (`schema.sql`, aplicado vía `psql`)
+- Instancia de Cloud SQL `neobanx-transaccional` (PostgreSQL) + base de datos lógica `neobanx` + usuario `postgres` + su esquema (`schema.sql`, aplicado vía `psql`)
+- Tópico Pub/Sub `transacciones-neobanx` + suscripción `transacciones-neobanx-sub` (esta última solo para pruebas manuales — el trigger de la Cloud Function usa su propia suscripción interna de Eventarc)
 - Bucket de Cloud Storage + objeto con el código zippeado del consumidor
 - Cloud Function v2 `consumidor` (trigger de Pub/Sub)
 - Repositorio de Artifact Registry + imagen Docker del frontend (build en Cloud Build) + servicio de Cloud Run `neobanx-demo` + su binding público de IAM
+- Repositorio de Artifact Registry + imagen Docker del generador (build en Cloud Build) + Cloud Run Job `neobanx-generador` (definido pero no se ejecuta automáticamente — ver `Backend/README.md`)
 
-**No crea:** el tópico/suscripción de Pub/Sub ni la instancia de Cloud SQL en sí — ver la sección de excepciones.
+Todo lo anterior se crea desde cero en cualquier proyecto GCP nuevo — no depende de recursos preexistentes. Ver [`Documentation/docker_terraform_explicado.md`](../Documentation/docker_terraform_explicado.md) para el detalle de cómo funciona la dockerización.
 
 ## Excepciones de configuración manual
 
-No todo pasó por Terraform. Documentado para que quede claro y sea verificable:
+Quedan dos pasos genuinamente manuales:
 
 | Qué se hizo a mano | Por qué | Cómo verificarlo |
 |---|---|---|
-| La instancia de Cloud SQL `neobanx-transaccional` **no la crea este Terraform** — `main.tf` solo la referencia como `data "google_sql_database_instance"`, asumiendo que ya existe | Se creó en Sprint 0, antes de escribir el Terraform de este repo | `gcloud sql instances describe neobanx-transaccional` — existe y el `data` block la encuentra por nombre |
 | Un registro de prueba en `clientes` se insertó a mano vía `psql`, no vía `schema.sql` (que solo crea tablas vacías) | Validar que el esquema y la llave foránea funcionan antes de que existiera el generador | `SELECT * FROM clientes;` desde Cloud Shell — 1 fila con `cc_num_hash = 'abc123hash'` (valor de prueba, no un hash real) |
-| Encender/apagar la instancia de Cloud SQL (`gcloud sql instances patch --activation-policy`) | Ahorrar créditos cuando nadie la está usando — no es parte del ciclo de vida de Terraform | `gcloud sql instances describe neobanx-transaccional --format="value(state)"` |
+| Encender/apagar la instancia de Cloud SQL (`gcloud sql instances patch --activation-policy`) | Ahorrar créditos cuando nadie la está usando — conveniencia opcional, no hace falta para que `deploy.sh`/`destroy.sh` funcionen | `gcloud sql instances describe neobanx-transaccional --format="value(state)"` |
+| Subir `fraudTrain.csv` una sola vez a `gs://neobanx-fraud-detection-datasets` (bucket público) | Terraform no debe ser dueño del contenido de un archivo de 350MB; es un paso del **equipo**, no de terceros — cualquiera que reproduzca el repo (incluido el profesor) ya descarga el CSV automáticamente desde ese bucket público, sin hacer nada manual | `curl -I https://storage.googleapis.com/neobanx-fraud-detection-datasets/fraudTrain.csv` debe responder `200 OK` |
 
-## Cómo desplegar desde cero (reproducible salvo las excepciones de arriba)
+## Cómo desplegar desde cero (100% reproducible, incluso en un proyecto GCP vacío)
 
 ```bash
 cd Infrastructure
@@ -117,7 +119,7 @@ terraform plan
 terraform apply
 ```
 
-Requiere el `terraform.tfvars` descrito arriba en "Configuración del proyecto GCP".
+Requiere el `terraform.tfvars` descrito arriba en "Configuración del proyecto GCP". La primera vez, crear la instancia de Cloud SQL toma varios minutos (aprovisionamiento de Cloud SQL).
 
 Para destruir todo y no dejar nada corriendo (ahorro de créditos):
 
@@ -125,7 +127,7 @@ Para destruir todo y no dejar nada corriendo (ahorro de créditos):
 terraform destroy
 ```
 
-Esto **no** destruye la instancia de Cloud SQL en sí (no la creó este Terraform, solo la referencia) — para apagarla en vez de borrarla, ver "Excepciones de configuración manual" arriba.
+Esto **sí destruye la instancia de Cloud SQL** (y el tópico/suscripción de Pub/Sub) por completo — ya no es necesario apagarla manualmente antes de destruir, aunque sigue siendo válido apagarla (ver tabla de arriba) si solo quieres pausarla sin borrar nada.
 
 ### Contrato de datos del generador
 

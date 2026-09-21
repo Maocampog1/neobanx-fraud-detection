@@ -53,18 +53,43 @@ El consumidor agrega un campo mas al insertar en BigQuery, `veredicto`
 categoria) — no viene del generador ni es un modelo entrenado, es un
 placeholder hasta que exista el flujo de Spark Structured Streaming.
 
-## Generador — uso local
+## Generador — dos formas de correrlo
 
-1. Descargar `fraudTrain.csv` (Kaggle `kartik2112/fraud-detection`) y
-   colocarlo en `Backend/generador/data/fraudTrain.csv` (esta ignorado por
-   git, no se sube al repo).
-2. Autenticarse: `gcloud auth application-default login`
-3. Instalar dependencias:
+**No hace falta descargar `fraudTrain.csv` de Kaggle** — el generador lo
+descarga solo la primera vez que corre, desde un bucket público
+(`gs://neobanx-fraud-detection-datasets/fraudTrain.csv`, subido una única
+vez por el equipo). Si ya tienes el archivo en
+`Backend/generador/data/fraudTrain.csv`, lo usa tal cual sin descargar
+nada.
+
+### Opción A — Cloud Run Job (recomendado, no requiere Python local)
+
+Terraform ya deja el Job `neobanx-generador` listo (construido vía Docker +
+Cloud Build). Para una prueba corta y automática:
+
+```bash
+./scripts/test.sh
+```
+
+Para una corrida con tu propia ventana de fechas, sin tocar el `.env`:
+
+```bash
+gcloud run jobs execute neobanx-generador --region=us-central1 --project=neobanx-fraud-detection \
+  --update-env-vars="FECHA_INICIO=2019-02-25 22:00:00,FECHA_FIN=2019-02-26 00:00:00,MAX_FILAS=268,INTERVALO_SEGUNDOS=4"
+```
+
+Detalle de por qué está dockerizado así (Docker, Terraform, Cloud Run Job)
+en [`Documentation/docker_terraform_explicado.md`](../Documentation/docker_terraform_explicado.md).
+
+### Opción B — uso local (para desarrollo/debug)
+
+1. Autenticarse: `gcloud auth application-default login`
+2. Instalar dependencias:
    ```powershell
    cd Backend/generador
    pip install -r requirements.txt
    ```
-4. Definir el salt del hash (no se versiona):
+3. Definir el salt del hash (no se versiona):
    ```powershell
    $env:GENERATOR_SALT = "<tu-salt>"
    ```
@@ -78,7 +103,7 @@ placeholder hasta que exista el flujo de Spark Structured Streaming.
    tanto, `clientes.cc_num_hash` en Cloud SQL solo tiene un valor de prueba
    (`abc123hash`), asi que cualquier salt local sirve para probar el
    generador de forma aislada sin romper nada.
-5. Ejecutar:
+4. Ejecutar:
    ```powershell
    python main.py
    ```
@@ -107,7 +132,7 @@ placeholder hasta que exista el flujo de Spark Structured Streaming.
 
    (ej. `2019-02-25 22:00:00` a `2019-02-26 00:00:00` trae 268 transacciones
    con 28 fraudes reales, ~18 minutos a la cadencia real de 4s).
-6. Verificar en Cloud Shell que los mensajes llegan:
+5. Verificar en Cloud Shell que los mensajes llegan:
    ```bash
    gcloud pubsub subscriptions pull transacciones-neobanx-sub --limit=5 --auto-ack
    ```

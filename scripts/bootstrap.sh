@@ -52,12 +52,11 @@ else
   echo "    Ya autenticado como: ${CUENTA_ACTIVA}"
 fi
 
-ADC_FILE="$HOME/.config/gcloud/application_default_credentials.json"
-if [[ ! -f "${ADC_FILE}" ]]; then
+if gcloud auth application-default print-access-token >/dev/null 2>&1; then
+  echo "    Application Default Credentials ya existen."
+else
   echo "==> No hay credenciales de aplicación, autenticando..."
   gcloud auth application-default login --no-browser
-else
-  echo "    Application Default Credentials ya existen."
 fi
 
 gcloud config set project "${GCP_PROJECT_ID}"
@@ -65,9 +64,10 @@ gcloud config set project "${GCP_PROJECT_ID}"
 # --- Paso 5: generar Infrastructure/terraform.tfvars a partir de .env ---
 echo "==> Generando Infrastructure/terraform.tfvars..."
 cat > "${ROOT_DIR}/Infrastructure/terraform.tfvars" <<TFVARS
-project_id  = "${GCP_PROJECT_ID}"
-region      = "${GCP_REGION}"
-db_password = "${DB_PASSWORD}"
+project_id     = "${GCP_PROJECT_ID}"
+region         = "${GCP_REGION}"
+db_password    = "${DB_PASSWORD}"
+generator_salt = "${GENERATOR_SALT}"
 TFVARS
 
 echo ""

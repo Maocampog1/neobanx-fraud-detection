@@ -1,3 +1,4 @@
-project_id  = "changeme"
-region      = "changeme"
-db_password = "changeme"
+project_id     = "changeme"
+region         = "changeme"
+db_password    = "changeme"
+generator_salt = "changeme"
