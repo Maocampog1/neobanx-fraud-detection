@@ -66,8 +66,9 @@ resource "google_bigquery_dataset" "raw" {
 }
 
 resource "google_bigquery_table" "transacciones_raw" {
-  dataset_id = google_bigquery_dataset.raw.dataset_id
-  table_id   = "transacciones_raw"
+  dataset_id           = google_bigquery_dataset.raw.dataset_id
+  table_id             = "transacciones_raw"
+  deletion_protection  = false
 
   time_partitioning {
     type  = "DAY"
@@ -104,7 +105,12 @@ resource "google_sql_database_instance" "transaccional" {
     tier              = "db-custom-2-8192"
     edition           = "ENTERPRISE"
     availability_type = "ZONAL"
-    activation_policy = "NEVER"
+    # activation_policy no se declara aqui: el API de Cloud SQL no permite
+    # crear una instancia directamente en estado NEVER (falla con
+    # "invalidOperation"), solo nace en ALWAYS. Se ignora en el lifecycle de
+    # abajo para que encender/apagarla a mano (ver README) nunca produzca
+    # un diff -- Terraform no intenta forzarla a ningun estado despues de
+    # crearla.
 
     disk_size       = 10
     disk_type       = "PD_SSD"
@@ -152,31 +158,31 @@ resource "google_sql_database_instance" "transaccional" {
   }
 
   lifecycle {
-    ignore_changes = [settings[0].disk_size]
+    ignore_changes = [settings[0].disk_size, settings[0].activation_policy]
   }
 }
 
-resource "google_sql_user" "postgres" {
-  name            = "postgres"
-  instance        = google_sql_database_instance.transaccional.name
-  deletion_policy = "ABANDON"
-
-  depends_on = [google_sql_database_instance.transaccional]
-}
-
-# El provider de Terraform gestiona la contraseña de usuarios Postgres conectándose
-# directo a la base (proxy local en 127.0.0.1:5432), lo cual no está disponible en
-# todos los entornos. Se fija vía el API de Cloud SQL Admin directamente en su lugar.
+# No se declara un resource "google_sql_user" para "postgres": Cloud SQL ya
+# crea ese usuario automaticamente al crear la instancia, y el API de
+# Postgres exige contraseña en la misma llamada de creacion -- intentar
+# "crearlo" de nuevo vía Terraform falla con "Missing user password" en un
+# proyecto nuevo. Alcanza con fijarle la contraseña directo por gcloud
+# (evita ademas el bug conocido del provider con el manejo nativo de
+# contraseñas de usuarios Postgres, que necesita un proxy local en
+# 127.0.0.1:5432 no disponible en todos los entornos).
 resource "null_resource" "set_postgres_password" {
-  depends_on = [google_sql_user.postgres]
+  depends_on = [google_sql_database_instance.transaccional]
 
   triggers = {
     password_hash = sha256(var.db_password)
   }
 
   provisioner "local-exec" {
-    interpreter = ["PowerShell", "-Command"]
-    command     = "gcloud sql users set-password postgres --instance=${google_sql_database_instance.transaccional.name} --password=\"${var.db_password}\" --project=${var.project_id}"
+    interpreter = ["sh", "-c"]
+    environment = {
+      NEOBANX_DB_PASSWORD = var.db_password
+    }
+    command = "gcloud sql users set-password postgres --instance=${google_sql_database_instance.transaccional.name} --password=\"$NEOBANX_DB_PASSWORD\" --project=${var.project_id}"
   }
 }
 
@@ -193,7 +199,7 @@ resource "null_resource" "aplicar_schema" {
   }
 
   provisioner "local-exec" {
-    interpreter = ["PowerShell", "-Command"]
+    interpreter = ["sh", "-c"]
     environment = {
       PGPASSWORD = var.db_password
     }
@@ -315,8 +321,9 @@ resource "null_resource" "build_frontend_image" {
 }
 
 resource "google_cloud_run_v2_service" "frontend" {
-  name     = "neobanx-demo"
-  location = var.region
+  name                = "neobanx-demo"
+  location            = var.region
+  deletion_protection = false
 
   depends_on = [null_resource.build_frontend_image]
 
