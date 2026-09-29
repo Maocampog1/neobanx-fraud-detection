@@ -64,7 +64,7 @@ Componentes ya provisionados y probados end-to-end:
 | Provider `google` | ~> 6.0 | Fijado en `main.tf`, no requiere acción manual |
 | gcloud CLI | cualquiera reciente | Autenticación (`gcloud auth ...`) y verificación (`gcloud pubsub`, `bq query`) |
 | Python | 3.11+ | Generador, consumidor (runtime `python312` en Cloud Functions) y frontend |
-| Docker | **No hace falta instalarlo localmente** | El Dockerfile de `Frontend/` se construye en Cloud Build automáticamente (`gcloud builds submit`, disparado por Terraform), no en tu máquina |
+| Docker | **No hace falta instalarlo localmente para desplegar en GCP** | Las imágenes de `Frontend/` y `Backend/generador/` se construyen en Cloud Build automáticamente (`gcloud builds submit`, disparado por Terraform), no en tu máquina. Docker sí es útil (opcional) si prefieres no instalar `gcloud`/`terraform`/`psql` en tu máquina — ver `Infrastructure/Dockerfile` y [`GUIA_DESPLIEGUE.md`](../GUIA_DESPLIEGUE.md) |
 
 ## Configuración del proyecto GCP
 

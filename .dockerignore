@@ -1,0 +1,17 @@
+# Nunca debe entrar al contexto de build de ninguna imagen de este repo.
+.git/
+.env
+Infrastructure/terraform.tfvars
+Infrastructure/.terraform/
+Infrastructure/terraform.tfstate
+Infrastructure/terraform.tfstate.backup
+Infrastructure/*.tfplan
+Infrastructure/consumidor.zip
+
+# Datos pesados / generados
+*.csv
+Backend/generador/data/
+
+# Python
+__pycache__/
+*.pyc

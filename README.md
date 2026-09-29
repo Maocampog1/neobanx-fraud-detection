@@ -112,6 +112,10 @@ Todo el entorno local (autenticación, configuración y despliegue) se levanta c
 
 ### Requisitos previos (una sola vez por máquina)
 
+**Recomendado — con Docker**: solo necesitas **Docker** instalado. La imagen `Infrastructure/Dockerfile` trae `gcloud` CLI, `terraform` y `psql` ya listos, así que no instalas nada más, sin importar tu sistema operativo. Ver el detalle de comandos (`docker build`, volumen de credenciales, etc.) en [`GUIA_DESPLIEGUE.md`](GUIA_DESPLIEGUE.md).
+
+**Alternativa — instalación local**, si prefieres no usar Docker:
+
 - `gcloud` CLI instalado
 - `terraform` >= 1.7
 - `psql` (usado internamente por Terraform para aplicar `schema.sql` a Cloud SQL)
@@ -224,6 +228,8 @@ Elimina todo lo gestionado por este Terraform, para no dejar recursos consumiend
 
 ### Resumen — flujo completo desde cero
 
+Sin Docker (requiere `gcloud`/`terraform`/`psql` instalados y Git Bash en Windows):
+
 ```bash
 git clone <url-del-repo>
 cd neobanx-fraud-detection
@@ -235,7 +241,19 @@ chmod +x scripts/bootstrap.sh scripts/deploy.sh scripts/destroy.sh scripts/test.
 ./scripts/test.sh   # prueba funcional: corre el generador acotado y verifica BigQuery
 ```
 
-Ver [`GUIA_DESPLIEGUE.md`](GUIA_DESPLIEGUE.md) para el detalle de cada paso, incluyendo cómo ver las transacciones resultantes.
+Con Docker (solo requiere Docker instalado, ver [`GUIA_DESPLIEGUE.md`](GUIA_DESPLIEGUE.md) para el detalle completo de cada comando):
+
+```bash
+git clone <url-del-repo>
+cd neobanx-fraud-detection
+cp .env.example .env
+# editar .env con los valores reales del equipo
+docker build -t neobanx-deploy -f Infrastructure/Dockerfile .
+docker volume create neobanx-gcloud-config
+# bootstrap, deploy y test se corren dentro del contenedor -- comandos exactos en GUIA_DESPLIEGUE.md
+```
+
+Ver [`GUIA_DESPLIEGUE.md`](GUIA_DESPLIEGUE.md) para el detalle de cada paso (ambas vías), incluyendo cómo ver las transacciones resultantes.
 
 > **Nota de alcance**: el tópico de Pub/Sub y la instancia de Cloud SQL (`neobanx-transaccional`) se aprovisionaron originalmente a mano en el Sprint 0; desde Sprint 1 este Terraform los gestiona como `resource` propios (los crea, actualiza y destruye), así que un proyecto GCP nuevo no necesita nada preexistente para desplegar.
 
