@@ -1,5 +1,34 @@
+// ============================================================================
+// NeobanX — configuración raíz de Terraform
+// ============================================================================
+//
+// La infraestructura está repartida por dominio en archivos separados.
+// Terraform lee TODOS los .tf del directorio, así que la división es solo
+// organizativa: no cambia el comportamiento, pero hace el código revisable y
+// reduce los conflictos de merge (tres personas trabajando sobre el mismo
+// repo chocaban constantemente en un main.tf de 400 líneas).
+//
+//   backend.tf     Estado remoto en GCS
+//   apis.tf        APIs de GCP habilitadas
+//   secrets.tf     Secret Manager, contraseñas generadas y cuentas de servicio
+//   pubsub.tf      Topics, suscripciones y DLQ
+//   storage.tf     Buckets
+//   cloudsql.tf    Instancia PostgreSQL y aplicación del esquema
+//   variables.tf   Entradas
+//   outputs.tf     Salidas (nombres de recursos para el resto del equipo)
+//
+// Pendientes del Sprint 2 (se agregan en su propio archivo):
+//   network.tf     Private Service Access y Cloud NAT
+//   redis.tf       Memorystore
+//   dataproc.tf    Clúster con Flink
+//   bigquery.tf    Datasets y Datastream
+//   monitoring.tf  Alertas y presupuesto
+//   run.tf         Servicios de Cloud Run (registro, cierre, frontend, generador)
+// ============================================================================
+
 terraform {
   required_version = ">= 1.7"
+
   required_providers {
     google = {
       source  = "hashicorp/google"
@@ -13,403 +42,32 @@ terraform {
       source  = "hashicorp/archive"
       version = "~> 2.4"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.11"
+    }
   }
 }
 
 provider "google" {
   project = var.project_id
   region  = var.region
-}
 
-# --- APIs necesarias para el proyecto ---
-
-resource "google_project_service" "cloudfunctions" {
-  service            = "cloudfunctions.googleapis.com"
-  disable_on_destroy = false
-}
-
-resource "google_project_service" "cloudbuild" {
-  service            = "cloudbuild.googleapis.com"
-  disable_on_destroy = false
-}
-
-resource "google_project_service" "run" {
-  service            = "run.googleapis.com"
-  disable_on_destroy = false
-}
-
-resource "google_project_service" "eventarc" {
-  service            = "eventarc.googleapis.com"
-  disable_on_destroy = false
-}
-
-resource "google_project_service" "artifactregistry" {
-  service            = "artifactregistry.googleapis.com"
-  disable_on_destroy = false
-}
-
-resource "google_project_service" "sqladmin" {
-  service            = "sqladmin.googleapis.com"
-  disable_on_destroy = false
-}
-
-resource "google_project_service" "pubsub" {
-  service            = "pubsub.googleapis.com"
-  disable_on_destroy = false
-}
-
-# --- BigQuery: capa Raw ---
-
-resource "google_bigquery_dataset" "raw" {
-  dataset_id = "raw"
-  location   = "US"
-}
-
-resource "google_bigquery_table" "transacciones_raw" {
-  dataset_id           = google_bigquery_dataset.raw.dataset_id
-  table_id             = "transacciones_raw"
-  deletion_protection  = false
-
-  time_partitioning {
-    type  = "DAY"
-    field = "trans_date_trans_time"
-  }
-
-  schema = jsonencode([
-    { name = "trans_num", type = "STRING" },
-    { name = "cc_num_hash", type = "STRING" },
-    { name = "merchant", type = "STRING" },
-    { name = "category", type = "STRING" },
-    { name = "amt", type = "NUMERIC" },
-    { name = "trans_date_trans_time", type = "TIMESTAMP" },
-    { name = "merch_lat", type = "FLOAT" },
-    { name = "merch_long", type = "FLOAT" },
-    { name = "is_fraud", type = "INTEGER" },
-    { name = "veredicto", type = "STRING" },
-    { name = "ingestion_timestamp", type = "TIMESTAMP" },
-    { name = "pubsub_message_id", type = "STRING" }
-  ])
-}
-
-# --- Cloud SQL: instancia + base de datos lógica + tablas ---
-
-resource "google_sql_database_instance" "transaccional" {
-  name                = "neobanx-transaccional"
-  database_version    = "POSTGRES_18"
-  region              = var.region
-  deletion_protection = false
-
-  depends_on = [google_project_service.sqladmin]
-
-  settings {
-    tier              = "db-custom-2-8192"
-    edition           = "ENTERPRISE"
-    availability_type = "ZONAL"
-    # activation_policy no se declara aqui: el API de Cloud SQL no permite
-    # crear una instancia directamente en estado NEVER (falla con
-    # "invalidOperation"), solo nace en ALWAYS. Se ignora en el lifecycle de
-    # abajo para que encender/apagarla a mano (ver README) nunca produzca
-    # un diff -- Terraform no intenta forzarla a ningun estado despues de
-    # crearla.
-
-    disk_size       = 10
-    disk_type       = "PD_SSD"
-    disk_autoresize = true
-
-    deletion_protection_enabled = false
-    enable_dataplex_integration = true
-    retain_backups_on_delete    = true
-
-    ip_configuration {
-      ipv4_enabled = true
-      ssl_mode     = "ENCRYPTED_ONLY"
-
-      authorized_networks {
-        name  = "maria-local"
-        value = "0.0.0.0/0"
-      }
-    }
-
-    backup_configuration {
-      enabled                        = true
-      location                       = "us"
-      start_time                     = "12:00"
-      point_in_time_recovery_enabled = true
-      transaction_log_retention_days = 7
-
-      backup_retention_settings {
-        retained_backups = 7
-        retention_unit   = "COUNT"
-      }
-    }
-
-    database_flags {
-      name  = "cloudsql.iam_authentication"
-      value = "on"
-    }
-
-    password_validation_policy {
-      enable_password_policy      = true
-      complexity                  = "COMPLEXITY_DEFAULT"
-      disallow_username_substring = true
-      min_length                  = 8
-      reuse_interval              = 0
-    }
-  }
-
-  lifecycle {
-    ignore_changes = [settings[0].disk_size, settings[0].activation_policy]
-  }
-}
-
-# No se declara un resource "google_sql_user" para "postgres": Cloud SQL ya
-# crea ese usuario automaticamente al crear la instancia, y el API de
-# Postgres exige contraseña en la misma llamada de creacion -- intentar
-# "crearlo" de nuevo vía Terraform falla con "Missing user password" en un
-# proyecto nuevo. Alcanza con fijarle la contraseña directo por gcloud
-# (evita ademas el bug conocido del provider con el manejo nativo de
-# contraseñas de usuarios Postgres, que necesita un proxy local en
-# 127.0.0.1:5432 no disponible en todos los entornos).
-resource "null_resource" "set_postgres_password" {
-  depends_on = [google_sql_database_instance.transaccional]
-
-  triggers = {
-    password_hash = sha256(var.db_password)
-  }
-
-  provisioner "local-exec" {
-    interpreter = ["sh", "-c"]
-    environment = {
-      NEOBANX_DB_PASSWORD = var.db_password
-    }
-    command = "gcloud sql users set-password postgres --instance=${google_sql_database_instance.transaccional.name} --password=\"$NEOBANX_DB_PASSWORD\" --project=${var.project_id}"
-  }
-}
-
-resource "google_sql_database" "neobanx" {
-  name     = "neobanx"
-  instance = google_sql_database_instance.transaccional.name
-}
-
-resource "null_resource" "aplicar_schema" {
-  depends_on = [google_sql_database.neobanx, null_resource.set_postgres_password]
-
-  triggers = {
-    schema_hash = filesha256("${path.module}/schema.sql")
-  }
-
-  provisioner "local-exec" {
-    interpreter = ["sh", "-c"]
-    environment = {
-      PGPASSWORD = var.db_password
-    }
-    command = "psql -h ${google_sql_database_instance.transaccional.public_ip_address} -p 5432 -U postgres -d ${google_sql_database.neobanx.name} --set=sslmode=require -f schema.sql"
-  }
-}
-
-# --- Pub/Sub: tópico de transacciones + suscripción de prueba manual ---
-
-resource "google_pubsub_topic" "transacciones" {
-  name = "transacciones-neobanx"
-
-  depends_on = [google_project_service.pubsub]
-}
-
-resource "google_pubsub_subscription" "transacciones_sub" {
-  name  = "transacciones-neobanx-sub"
-  topic = google_pubsub_topic.transacciones.name
-
-  ack_deadline_seconds = 10
-
-  depends_on = [google_pubsub_topic.transacciones]
-}
-
-# --- Consumidor: Cloud Function conectada a Pub/Sub ---
-
-resource "google_storage_bucket" "function_source" {
-  name                        = "${var.project_id}-function-source"
-  location                    = var.region
-  uniform_bucket_level_access = true
-  force_destroy               = true
-}
-
-data "archive_file" "consumidor_zip" {
-  type        = "zip"
-  source_dir  = "${path.module}/../Backend/consumidor"
-  output_path = "${path.module}/consumidor.zip"
-}
-
-resource "google_storage_bucket_object" "consumidor_source" {
-  name   = "consumidor-${data.archive_file.consumidor_zip.output_md5}.zip"
-  bucket = google_storage_bucket.function_source.name
-  source = data.archive_file.consumidor_zip.output_path
-}
-
-resource "google_cloudfunctions2_function" "consumidor" {
-  name     = "consumidor"
-  location = var.region
-
-  depends_on = [
-    google_project_service.cloudfunctions,
-    google_project_service.cloudbuild,
-    google_project_service.run,
-    google_project_service.eventarc,
-    google_project_service.artifactregistry,
-  ]
-
-  build_config {
-    runtime     = "python312"
-    entry_point = "consumidor"
-    source {
-      storage_source {
-        bucket = google_storage_bucket.function_source.name
-        object = google_storage_bucket_object.consumidor_source.name
-      }
-    }
-  }
-
-  service_config {
-    max_instance_count = 3
-    available_memory    = "256M"
-    timeout_seconds       = 60
-    environment_variables = {
-      GOOGLE_CLOUD_PROJECT = var.project_id
-      BQ_DATASET           = google_bigquery_dataset.raw.dataset_id
-      BQ_TABLE             = google_bigquery_table.transacciones_raw.table_id
-    }
-  }
-
-  event_trigger {
-    trigger_region = var.region
-    event_type     = "google.cloud.pubsub.topic.v1.messagePublished"
-    pubsub_topic   = google_pubsub_topic.transacciones.id
-    retry_policy   = "RETRY_POLICY_RETRY"
-  }
-}
-
-# --- Frontend: Streamlit en Cloud Run ---
-
-resource "google_project_service" "run_frontend_deps" {
-  for_each = toset([
-    "artifactregistry.googleapis.com",
-    "cloudbuild.googleapis.com",
-    "run.googleapis.com",
-  ])
-  service            = each.value
-  disable_on_destroy = false
-}
-
-resource "google_artifact_registry_repository" "frontend" {
-  location      = var.region
-  repository_id = "frontend"
-  format        = "DOCKER"
-
-  depends_on = [google_project_service.run_frontend_deps]
-}
-
-resource "null_resource" "build_frontend_image" {
-  triggers = {
-    app_hash = filesha256("${path.module}/../Frontend/app.py")
-  }
-
-  provisioner "local-exec" {
-    working_dir = "${path.module}/../Frontend"
-    command      = "gcloud builds submit --tag ${var.region}-docker.pkg.dev/${var.project_id}/frontend/neobanx-demo:latest --project=${var.project_id}"
-  }
-
-  depends_on = [google_artifact_registry_repository.frontend]
-}
-
-resource "google_cloud_run_v2_service" "frontend" {
-  name                = "neobanx-demo"
-  location            = var.region
-  deletion_protection = false
-
-  depends_on = [null_resource.build_frontend_image]
-
-  template {
-    containers {
-      image = "${var.region}-docker.pkg.dev/${var.project_id}/frontend/neobanx-demo:latest"
-    }
-  }
-}
-
-resource "google_cloud_run_v2_service_iam_member" "frontend_public" {
-  location = google_cloud_run_v2_service.frontend.location
-  name     = google_cloud_run_v2_service.frontend.name
-  role     = "roles/run.invoker"
-  member   = "allUsers"
-}
-
-# --- Generador: streaming del CSV a Pub/Sub, como Cloud Run Job ---
-# Reutiliza las APIs ya habilitadas en google_project_service.run_frontend_deps
-# (artifactregistry, cloudbuild, run).
-
-resource "google_artifact_registry_repository" "backend" {
-  location      = var.region
-  repository_id = "backend"
-  format        = "DOCKER"
-
-  depends_on = [google_project_service.run_frontend_deps]
-}
-
-resource "null_resource" "build_generador_image" {
-  triggers = {
-    main_hash       = filesha256("${path.module}/../Backend/generador/main.py")
-    holidays_hash   = filesha256("${path.module}/../Backend/generador/holidays.py")
-    dockerfile_hash = filesha256("${path.module}/../Backend/generador/Dockerfile")
-  }
-
-  provisioner "local-exec" {
-    working_dir = "${path.module}/../Backend/generador"
-    command      = "gcloud builds submit --tag ${var.region}-docker.pkg.dev/${var.project_id}/backend/neobanx-generador:latest --project=${var.project_id}"
-  }
-
-  depends_on = [google_artifact_registry_repository.backend]
-}
-
-# Define el Job pero no lo ejecuta -- una corrida sin acotar tomaria ~60 dias
-# y ademas supera el limite maximo de 24h por tarea de Cloud Run Jobs. Correr
-# una ventana acotada es una accion aparte (ver scripts/test.sh).
-resource "google_cloud_run_v2_job" "generador" {
-  name                = "neobanx-generador"
-  location            = var.region
-  deletion_protection = false
-
-  depends_on = [null_resource.build_generador_image]
-
-  template {
-    parallelism = 1
-    task_count  = 1
-
-    template {
-      max_retries = 0
-      timeout     = "3600s"
-
-      containers {
-        image = "${var.region}-docker.pkg.dev/${var.project_id}/backend/neobanx-generador:latest"
-
-        env {
-          name  = "PROJECT_ID"
-          value = var.project_id
-        }
-        env {
-          name  = "TOPIC_ID"
-          value = google_pubsub_topic.transacciones.name
-        }
-        env {
-          name  = "GENERATOR_SALT"
-          value = var.generator_salt
-        }
-        env {
-          name  = "DATASET_URL"
-          value = var.dataset_url
-        }
-      }
-    }
-  }
-}
-
-output "frontend_url" {
-  value = google_cloud_run_v2_service.frontend.uri
+  // POR QUÉ HACEN FALTA ESTAS DOS LÍNEAS
+  //
+  // Algunas APIs (billingbudgets entre ellas) exigen un "quota project"
+  // explícito cuando se autentica con credenciales de usuario (ADC) en lugar
+  // de una cuenta de servicio. Sin esto, la llamada se atribuye al proyecto
+  // genérico del cliente de gcloud (764086051850) en vez de al nuestro, y
+  // falla con un 403 SERVICE_DISABLED cuyo mensaje despista: habla del quota
+  // project aunque la API sí esté habilitada en nuestro proyecto.
+  //
+  // `user_project_override` le dice al provider que use `billing_project` como
+  // proyecto de cuota en esas llamadas.
+  billing_project       = var.project_id
+  user_project_override = true
 }

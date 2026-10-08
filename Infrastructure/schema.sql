@@ -160,6 +160,20 @@ ALTER ROLE datastream_user WITH REPLICATION;
 
 CREATE TABLE clientes (
     cliente_id              BIGSERIAL    PRIMARY KEY,
+
+    -- Llave natural tokenizada: HMAC-SHA256 de (nombre|apellido|fecha_nacimiento)
+    -- del dataset, con la misma clave de Secret Manager que usa cc_num_hash.
+    --
+    -- Para qué sirve: identifica a una persona de forma estable SIN guardar su
+    -- identidad real. Permite que la carga de datos maestros sea idempotente
+    -- (`ON CONFLICT (cliente_hash) DO NOTHING`), que es necesario porque el
+    -- equipo destruye y recrea el entorno en cada sesión de trabajo y la carga
+    -- vuelve a correr cada vez.
+    --
+    -- No se puede usar el nombre enmascarado como llave natural: "J***" y
+    -- "D***" colisionarían entre personas distintas.
+    cliente_hash            TEXT         NOT NULL UNIQUE,
+
     nombre_enmascarado      TEXT         NOT NULL,
     apellido_enmascarado    TEXT         NOT NULL,
     genero                  CHAR(1)      CHECK (genero IS NULL OR genero IN ('M','F')),
@@ -475,18 +489,17 @@ CREATE PUBLICATION neobanx_datastream_pub
 
 COMMIT;
 
--- El slot de replicación va FUERA de la transacción: pg_create_logical_replication_slot
--- no puede ejecutarse dentro de un bloque transaccional.
--- No se borra ni se recrea si ya existe: si Datastream está conectado, borrarlo
--- falla, y conservarlo evita perder la posición de lectura del WAL.
-SELECT CASE
-    WHEN EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = 'neobanx_datastream_slot')
-        THEN 'Slot neobanx_datastream_slot ya existe, se conserva.'
-    ELSE (
-        SELECT 'Slot creado: ' || slot_name
-        FROM pg_create_logical_replication_slot('neobanx_datastream_slot', 'pgoutput')
-    )
-END AS estado_slot;
+-- NOTA — el slot de replicación NO se crea aquí.
+--
+-- `pg_create_logical_replication_slot` exige el atributo REPLICATION, y en
+-- Cloud SQL el usuario `postgres` tiene el rol `cloudsqlsuperuser` pero NO ese
+-- atributo. Intentarlo desde aquí falla con:
+--
+--     ERROR: must be superuser or replication role to use replication slots
+--
+-- El slot lo crea `aplicar_schema.sh` en un segundo paso, conectándose como
+-- `datastream_user`, que sí recibió REPLICATION en la sección 2. La publicación
+-- de arriba sí la puede crear `postgres`, así que esa se queda aquí.
 
 
 -- ============================================================================

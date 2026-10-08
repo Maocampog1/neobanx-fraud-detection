@@ -1,4 +1,28 @@
-project_id     = "changeme"
-region         = "changeme"
-db_password    = "changeme"
-generator_salt = "changeme"
+# Plantilla de Infrastructure/terraform.tfvars
+#
+# El archivo real lo genera `scripts/bootstrap.sh` a partir de tu `.env`.
+# No lo escribas a mano.
+#
+# DESDE EL SPRINT 2 ESTE ARCHIVO YA NO CONTIENE SECRETOS.
+#
+# Antes pedía `db_password` y `generator_salt`, que cada persona copiaba de un
+# documento compartido. Ahora Terraform genera la contraseña de postgres, las
+# de los cinco roles de aplicación y la clave HMAC, y las guarda en Secret
+# Manager (ver secrets.tf). Los servicios las leen de ahí en tiempo de
+# ejecución, así que nadie necesita conocerlas.
+#
+# Esto además elimina un fallo silencioso del Sprint 1: si dos personas
+# desplegaban con un `generator_salt` distinto, los `cc_num_hash` no coincidían
+# y el join entre `cuentas` y `transacciones` quedaba roto sin ningún error.
+
+project_id = "changeme"
+region     = "changeme"
+
+# Opcionales (tienen default en variables.tf, descomenta solo si los cambias):
+#
+# zona                        = "us-central1-a"
+# db_tier                     = "db-custom-2-8192"
+# timeout_veredicto_segundos  = 30
+# umbral_monto_preseleccion   = 200
+# probabilidad_muestreo       = 0.15
+# correo_alertas              = "tu-correo@eafit.edu.co"
