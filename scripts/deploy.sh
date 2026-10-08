@@ -1,14 +1,30 @@
 #!/usr/bin/env bash
-# deploy.sh — Despliega toda la infraestructura de NeobanX (Sprint 1) en GCP.
+# deploy.sh — Despliega toda la infraestructura de NeobanX en GCP.
 #
 # Requisitos previos:
 #   - gcloud CLI instalado y autenticado (gcloud auth application-default login)
 #   - terraform >= 1.7 instalado
-#   - psql instalado (usado internamente por Terraform para aplicar schema.sql)
-#   - Infrastructure/terraform.tfvars creado localmente (NO versionado) con:
-#       project_id  = "neobanx-fraud-detection"
-#       region      = "us-central1"
-#       db_password = "<contraseña real de postgres, ver documento privado del equipo>"
+#   - psql y cloud-sql-proxy instalados (los usa Terraform para aplicar
+#     schema.sql y cargar los datos maestros; la imagen Docker del repo ya los
+#     trae, ver GUIA_DESPLIEGUE.md)
+#   - python3 (lo usa la carga de clientes y cuentas; también viene en la imagen)
+#   - Infrastructure/terraform.tfvars generado por ./scripts/bootstrap.sh
+#     (NO se escribe a mano)
+#
+# NOTA — ya no hay secretos en terraform.tfvars.
+#   Hasta el Sprint 1 había que poner ahí `db_password` y `generator_salt`,
+#   pedidos por un canal privado. Desde el Sprint 2 Terraform GENERA la
+#   contraseña de postgres, las de los 5 roles de aplicación y la clave HMAC, y
+#   las guarda en Secret Manager. El tfvars solo lleva project_id, region y la
+#   configuración de alertas.
+#
+#   Para consultar un secreto cuando haga falta:
+#     gcloud secrets versions access latest --secret=neobanx-db-postgres
+#
+# NOTA — el estado de Terraform es REMOTO (bucket de GCS, ver
+#   Infrastructure/backend.tf). Si vienes del Sprint 1, borra tus
+#   terraform.tfstate* y .terraform/ locales ANTES del primer init, y si
+#   Terraform ofrece copiar tu estado local al backend, responde NO.
 #
 # Uso:
 #   ./deploy.sh            # muestra el plan y pide confirmación antes de aplicar

@@ -88,8 +88,8 @@ def publicar_transaccion(payload: dict) -> str:
 
 
 def limpiar_datos(df: pd.DataFrame) -> pd.DataFrame:
-    total_original = len(df)
 
+    total_original = len(df)
     sin_nulos = df.dropna(subset=COLUMNAS_CONTRATO)
     descartadas_nulos = total_original - len(sin_nulos)
 

@@ -1,0 +1,10 @@
+# Dependencias de Backend/common/.
+#
+# Este paquete es compartido: lo consumen el generador, el servicio de registro,
+# el de cierre y el proceso de carga de clientes/cuentas. Cada uno debe incluir
+# estas líneas en su propio requirements.txt (o instalar este archivo), porque
+# las imágenes Docker se construyen por servicio.
+#
+# Si solo se usa hmac_util con la clave en NEOBANX_HMAC_KEY (desarrollo local),
+# no hace falta ninguna dependencia: hmac y hashlib son de la librería estándar.
+google-cloud-secret-manager>=2.20,<3
