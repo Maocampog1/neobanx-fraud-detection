@@ -1,0 +1,54 @@
+# Imagen de DESARROLLO LOCAL para el job de Flink -- NO es la imagen que se
+# despliega a ningun lado. El job real corre en el Flink que ya viene
+# instalado en el cluster de Dataproc (componente opcional FLINK, ver
+# Infrastructure/dataproc.tf); esta imagen solo existe para poder escribir y
+# probar la logica del job con PyFlink + MiniCluster en la maquina local,
+# sin pagar un cluster real mientras se itera.
+#
+# VERSION FIJADA, NO "la ultima" -- aprendimos esto por las malas: la
+# primera vez instalamos `apache-flink` sin version (dio 2.3.0, la mas
+# reciente) y validamos todo en local con una API (AsyncDataStream) que
+# simplemente NO EXISTE en el Flink 1.17.0 que de verdad corre en el
+# cluster (Dataproc image_version="2.2-debian12"). Confirmado leyendo el
+# pyflink.zip real del cluster por SSH. Flink 1.17 tampoco tiene wheels de
+# numpy para Python 3.11+, por eso esta imagen usa 3.10.
+#
+# Por que no se instala apache-flink directo con pip en el host: Python 3.13
+# (el unico instalado localmente) no tiene builds de `grpcio-tools`
+# (dependencia de apache-beam, que a su vez usa apache-flink) para Windows,
+# y de todas formas no soportaria fijar 1.17. Python 3.10 + Java si funciona.
+#
+# "-bookworm" (Debian 12) FIJO, NO "python:3.10-slim" a secas -- ese tag
+# "flotante" paso de Debian 12 a 13 (trixie) sin aviso entre sesiones de
+# este mismo proyecto. Dataproc corre Debian 12 (image_version=
+# "2.2-debian12" en dataproc.tf); el venv.zip que empaqueta esta imagen
+# (ver empaquetar_venv.sh) incluye un libpython3.10.so compilado contra el
+# glibc de esta imagen, y si no coincide con el del cluster real, el
+# binario ni siquiera carga ("version `GLIBC_2.38' not found") --
+# confirmado probando el venv.zip en un contenedor debian:12-slim limpio.
+FROM python:3.10-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        default-jdk-headless \
+        patchelf \
+    && rm -rf /var/lib/apt/lists/*
+
+# cloudpickle: dependencia transitiva de PyFlink que faltaba en el cluster
+# real (ModuleNotFoundError en los TaskManagers, ver Backend/flink/README.md)
+# -- se fija aqui tambien para que esta imagen sea la base exacta del
+# venv.zip que se empaqueta para el cluster (ver venv/ y empaquetar_venv.sh).
+# patchelf: lo usa empaquetar_venv.sh para que el venv empaquetado no
+# dependa de libpython3.10.so.1.0 del SISTEMA (que el cluster real de
+# Dataproc no tiene, corre Python 3.11) -- ver ese script para el detalle.
+RUN pip install --no-cache-dir apache-flink==1.17.0 pydantic requests redis cloudpickle
+
+# Flink 1.17 usa reflexion interna (ClosureCleaner) que Java 17+ bloquea por
+# defecto ("module java.base does not opens java.lang..."). Java 11, lo que
+# Flink 1.17 espera, ya no esta disponible en los repos de Debian 12 (y
+# Debian 11 quedo sin soporte, su repo esta archivado). En vez de perseguir
+# una imagen con Java 11 exacto, se destraba Java 17 con los `--add-opens`
+# que pide el error -- `JDK_JAVA_OPTIONS` lo respeta cualquier `java`
+# invocado en el contenedor automaticamente, sin tocar cada comando.
+ENV JDK_JAVA_OPTIONS="--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED"
+
+WORKDIR /workspace

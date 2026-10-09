@@ -17,13 +17,16 @@
 //   variables.tf   Entradas
 //   outputs.tf     Salidas (nombres de recursos para el resto del equipo)
 //
-// Pendientes del Sprint 2 (se agregan en su propio archivo):
+// Archivos agregados durante el Sprint 2:
 //   network.tf     Private Service Access y Cloud NAT
 //   redis.tf       Memorystore
 //   dataproc.tf    Clúster con Flink
 //   bigquery.tf    Datasets y Datastream
 //   monitoring.tf  Alertas y presupuesto
-//   run.tf         Servicios de Cloud Run (registro, cierre, frontend, generador)
+//   run.tf         Cloud Run del flujo transaccional: registro, cierre,
+//                  stub_veredicto (reemplazo temporal de Flink). Frontend y
+//                  generador quedan fuera de este archivo -- no son parte de
+//                  este bloque.
 // ============================================================================
 
 terraform {

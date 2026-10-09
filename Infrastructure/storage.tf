@@ -54,6 +54,63 @@ resource "google_storage_bucket_iam_member" "flink_checkpoints_rw" {
   member = "serviceAccount:${google_service_account.componentes["flink"].email}"
 }
 
+// Puente de archivos entre Pub/Sub y el job de Flink.
+//
+// POR QUÉ EXISTE: PyFlink no permite implementar un Source/Sink en Python
+// puro -- su API de Source/Sink (incluso la version moderna) son wrappers
+// de implementaciones en Java, y no existe un conector de Pub/Sub con
+// bindings de Python (si existe uno oficial en Java,
+// apache/flink-connector-gcp-pubsub, pero conectarlo desde PyFlink
+// implicaria compilarlo con Maven y manejar la JVM a mano via py4j, sin
+// ningun precedente documentado -- demasiado riesgo para el tiempo que
+// queda del bloque).
+//
+// En su lugar: dos procesos Python (Backend/flink/puente_entrada.py y
+// puente_salida.py) hacen de puente, corriendo en el mismo nodo master de
+// Dataproc junto al job, con la identidad de sa-flink (ya tiene los roles
+// de Pub/Sub que necesitan). Flink SI tiene un conector de archivos real
+// con bindings de Python (FileSource/FileSink), asi que el job lee/escribe
+// este bucket como cualquier otro stream de archivos:
+//
+//   sub-flink-preseleccionadas -> puente_entrada.py -> entrada/*.jsonl
+//     -> FileSource (monitoreo continuo) -> [reglas] -> FileSink
+//     -> salida/*.jsonl -> puente_salida.py -> tx-veredictos
+resource "google_storage_bucket" "flink_puente" {
+  name     = "${var.project_id}-flink-puente"
+  location = var.region
+
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+  force_destroy               = true
+
+  // Son mensajes en transito, no datos de negocio -- una vez que Flink los
+  // procesa (entrada) o puente_salida.py los publica (salida), no sirven
+  // para nada. Edad corta para no acumular basura.
+  lifecycle_rule {
+    condition {
+      age = 1
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  labels = {
+    componente = "flink"
+    gestionado = "terraform"
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_storage_bucket_iam_member" "flink_puente_rw" {
+  for_each = toset(["roles/storage.objectAdmin", "roles/storage.legacyBucketReader"])
+
+  bucket = google_storage_bucket.flink_puente.name
+  role   = each.value
+  member = "serviceAccount:${google_service_account.componentes["flink"].email}"
+}
+
 // Staging de los jobs de Dataproc (JAR del job de Flink, scripts de la carga
 // batch de perfiles a Redis).
 resource "google_storage_bucket" "dataproc_staging" {

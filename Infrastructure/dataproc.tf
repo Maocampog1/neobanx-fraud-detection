@@ -33,6 +33,18 @@
 //     Esto es lo que evita la factura sorpresa por dejarlo prendido un fin de
 //     semana. Si se autodestruye, el siguiente `terraform apply` lo recrea.
 
+// Accion de inicializacion: instala las dependencias de Python que
+// necesitan perfiles_redis.py y el job de Flink en TODOS los nodos. Ver
+// instalar_dependencias_flink.sh para por que esto, y no
+// `dataproc:pip.packages`, es lo que de verdad instala algo.
+resource "google_storage_bucket_object" "script_dependencias_flink" {
+  name   = "init-actions/instalar_dependencias_flink.sh"
+  bucket = google_storage_bucket.dataproc_staging.name
+  source = "${path.module}/instalar_dependencias_flink.sh"
+
+  source_md5hash = filemd5("${path.module}/instalar_dependencias_flink.sh")
+}
+
 resource "google_dataproc_cluster" "flink" {
   name   = "neobanx-flink"
   region = var.region
@@ -101,16 +113,6 @@ resource "google_dataproc_cluster" "flink" {
       optional_components = ["FLINK"]
 
       override_properties = {
-        // Dependencias de Python para el job batch de perfiles. Se instalan al
-        // crear el clúster, no en cada job, así que el job arranca sin esperar.
-        //   redis                        -> escribir los perfiles
-        //   google-cloud-secret-manager  -> leer la clave HMAC y el auth de Redis
-        //
-        // Los secretos se leen DENTRO del job, no se pasan como argumentos:
-        // los argumentos quedan visibles en la consola de Dataproc y en el
-        // historial de jobs.
-        "dataproc:pip.packages" = "redis==5.0.1,google-cloud-secret-manager==2.20.2"
-
         // Flink corre sobre YARN en Dataproc.
         "flink:taskmanager.numberOfTaskSlots" = "2"
 
@@ -152,6 +154,15 @@ resource "google_dataproc_cluster" "flink" {
       // sin abrir puertos ni usar túneles SSH. Es como se revisa si el job
       // está RUNNING y se miran sus métricas.
       enable_http_port_access = true
+    }
+
+    // Dependencias de Python para perfiles_redis.py (PySpark) y el job de
+    // Flink (Backend/flink/) -- ver instalar_dependencias_flink.sh para por
+    // qué esto reemplazó a la propiedad `dataproc:pip.packages` (no
+    // funcionaba: PEP 668 en la imagen 2.2-debian12).
+    initialization_action {
+      script      = "gs://${google_storage_bucket.dataproc_staging.name}/${google_storage_bucket_object.script_dependencias_flink.name}"
+      timeout_sec = 300
     }
   }
 

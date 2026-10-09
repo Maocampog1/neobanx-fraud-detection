@@ -14,6 +14,12 @@ params)`, `commit()`) -- el codigo que las usa no necesita saber cual es.
 """
 
 import os
+import threading
+
+# Cache a nivel de proceso del Connector y la contrasena -- ver
+# _conectar_nube para por que hace falta.
+_candado = threading.Lock()
+_connector_cache = {"conector": None, "password": None}
 
 
 def conectar():
@@ -45,20 +51,37 @@ def _conectar_local(db_user: str, db_name: str):
 
 
 def _conectar_nube(instance_connection_name: str, db_user: str, db_name: str):
-    from google.cloud import secretmanager
-    from google.cloud.sql.connector import Connector
+    # `registro` llama conectar() una vez por request, serializado -- nunca
+    # fue un problema ahi. `cierre` es un proceso de larga vida que llama
+    # esto desde el monitor de timeouts Y desde el callback de Pub/Sub, a
+    # veces al mismo tiempo. Creando un Connector() nuevo cada vez (como
+    # hacia esta funcion antes), cada uno abre su propio hilo de fondo para
+    # renovar certificados contra la API de Cloud SQL -- bajo carga
+    # concurrente, varios compitiendo a la vez producian
+    # "BrokenPipeError"/"DeadlineExceeded" al refrescar, confirmado en los
+    # logs reales de `cierre` durante una prueba de carga. Cachear UN solo
+    # Connector (y la contrasena, que no cambia en la vida del proceso) por
+    # proceso resuelve esto -- es el patron que la propia documentacion del
+    # conector recomienda.
+    with _candado:
+        if _connector_cache["password"] is None:
+            from google.cloud import secretmanager
 
-    secreto_id = os.environ["DB_PASSWORD_SECRET"]
-    proyecto = os.environ["GOOGLE_CLOUD_PROJECT"]
-    cliente = secretmanager.SecretManagerServiceClient()
-    nombre = f"projects/{proyecto}/secrets/{secreto_id}/versions/latest"
-    password = cliente.access_secret_version(name=nombre).payload.data.decode("utf-8")
+            secreto_id = os.environ["DB_PASSWORD_SECRET"]
+            proyecto = os.environ["GOOGLE_CLOUD_PROJECT"]
+            cliente = secretmanager.SecretManagerServiceClient()
+            nombre = f"projects/{proyecto}/secrets/{secreto_id}/versions/latest"
+            _connector_cache["password"] = cliente.access_secret_version(name=nombre).payload.data.decode("utf-8")
 
-    connector = Connector()
-    return connector.connect(
+        if _connector_cache["conector"] is None:
+            from google.cloud.sql.connector import Connector
+
+            _connector_cache["conector"] = Connector()
+
+    return _connector_cache["conector"].connect(
         instance_connection_name,
         "pg8000",
         user=db_user,
-        password=password,
+        password=_connector_cache["password"],
         db=db_name,
     )
