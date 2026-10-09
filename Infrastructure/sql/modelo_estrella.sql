@@ -21,9 +21,10 @@
 --   esperado: no rompe el deploy ni deja nada a medias.
 --
 -- PII
---   Ningún objeto de este dataset expone nombres, fecha de nacimiento,
---   ocupación, ciudad ni coordenadas del cliente
---   (Documentation/reglas_calidad_neobanx.md, sección 6).
+--   Ningún objeto de este dataset expone PII en claro. La única tabla con
+--   datos de cliente es clientes_enmascarados, y solo con valores
+--   generalizados (inicial, año, código postal truncado), sin ciudad ni
+--   coordenadas (Documentation/reglas_calidad_neobanx.md, sección 6).
 --
 -- TIPOS
 --   Los CAST a DATE/TIMESTAMP son a propósito: hacen que el script funcione
@@ -101,6 +102,27 @@ FROM (
     DATE_DIFF(DATE '2020-12-31', CAST(fecha_nacimiento AS DATE), YEAR) AS edad
   FROM raw.public_clientes
 );
+
+-- ---------------------------------------------------------------------------
+-- clientes_enmascarados: capa de PII enmascarada (enmascaramiento ESTÁTICO)
+-- ---------------------------------------------------------------------------
+-- La genera sa-analitica, la única cuenta (con Datastream) que puede leer las
+-- columnas con policy tag en raw.public_clientes. Reemplaza al enmascaramiento
+-- dinámico de BigQuery, que exige una organización (ver gobernanza.tf).
+-- Generalización aplicada:
+--   nombre/apellido  -> primera letra + '***'
+--   fecha_nacimiento -> solo el año
+--   codigo_postal    -> primeros 3 dígitos + 'XX'
+--   ciudad, coordenadas, género y ocupación -> se omiten
+CREATE OR REPLACE TABLE analitica.clientes_enmascarados AS
+SELECT
+  cliente_id,
+  CONCAT(SUBSTR(CAST(nombre_enmascarado AS STRING), 1, 1), '***')   AS nombre,
+  CONCAT(SUBSTR(CAST(apellido_enmascarado AS STRING), 1, 1), '***') AS apellido,
+  EXTRACT(YEAR FROM CAST(fecha_nacimiento AS DATE))                 AS anio_nacimiento,
+  estado_geo,
+  CONCAT(SUBSTR(CAST(codigo_postal AS STRING), 1, 3), 'XX')         AS codigo_postal_aprox
+FROM raw.public_clientes;
 
 -- ---------------------------------------------------------------------------
 -- dim_comercio
