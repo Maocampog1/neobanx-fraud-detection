@@ -1,5 +1,6 @@
 // ============================================================================
 // gobernanza.tf — clasificación de PII con policy tags (control por columna)
+//                 + API de linaje
 // ============================================================================
 //
 // QUÉ CREA
@@ -11,6 +12,9 @@
 //   - Quién ve qué en raw.public_clientes:
 //       sa-analitica y Datastream -> datos reales (FineGrainedReader)
 //       cualquier otra cuenta     -> ACCESO DENEGADO a esas columnas
+//   - La API de Data Lineage: con ella BigQuery registra solo el linaje de
+//     cada consulta (qué tablas leyó y cuál escribió). La API de Dataplex ya
+//     se habilita en apis.tf.
 //
 // POR QUÉ NO HAY ENMASCARAMIENTO DINÁMICO
 //   Las "data policies" de BigQuery (maskedReader) exigen que el proyecto
@@ -87,6 +91,18 @@ resource "google_data_catalog_policy_tag_iam_member" "lectores_cuasi" {
   policy_tag = google_data_catalog_policy_tag.cuasi_identificador.name
   role       = "roles/datacatalog.categoryFineGrainedReader"
   member     = each.value
+}
+
+// ---------------------------------------------------------------------------
+// Linaje (Dataplex)
+// ---------------------------------------------------------------------------
+// Con la API de Data Lineage activa, cada consulta de BigQuery (incluidas las
+// programadas del modelo y de calidad) registra automáticamente qué tablas
+// leyó y cuál escribió. Se ve en BigQuery > tabla > pestaña "Linaje".
+// Solo se registran las consultas que corren DESPUÉS de activarla.
+resource "google_project_service" "linaje" {
+  service            = "datalineage.googleapis.com"
+  disable_on_destroy = false
 }
 
 // Lo leen los scripts de scripts/ (aplicar_policy_tags.sh, construir_analitica.sh).

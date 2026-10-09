@@ -191,3 +191,78 @@ SELECT
 FROM raw.public_transacciones AS t
 LEFT JOIN raw.public_cuentas  AS q USING (cc_num_hash)
 LEFT JOIN veredicto_efectivo  AS v USING (trans_num);
+
+
+-- ---------------------------------------------------------------------------
+-- linaje_transaccion: el recorrido de UNA transacción por la plataforma
+-- ---------------------------------------------------------------------------
+-- Una fila por paso, sobre la réplica `raw` (lo que pasó en Cloud SQL) y el
+-- modelo analítico. Uso:
+--   SELECT * FROM analitica.linaje_transaccion
+--   WHERE trans_num = '...' ORDER BY orden;
+-- Va al final porque lee fact_transacciones, que se crea justo arriba.
+CREATE OR REPLACE VIEW analitica.linaje_transaccion
+OPTIONS (description = 'Recorrido de cada transacción: registro, veredicto, cierre, réplica CDC y modelo analítico')
+AS
+WITH t AS (
+  SELECT
+    trans_num,
+    estado,
+    motivo_preseleccion,
+    CAST(created_at AS TIMESTAMP)    AS creada_at,
+    CAST(finalizada_at AS TIMESTAMP) AS finalizada_at
+  FROM raw.public_transacciones
+)
+SELECT
+  trans_num,
+  1                                                           AS orden,
+  'registro'                                                  AS paso,
+  'Generador -> Cloud Run registro -> Cloud SQL transacciones' AS recorrido,
+  creada_at                                                   AS momento,
+  CONCAT('motivo_preseleccion=', IFNULL(motivo_preseleccion, 'n/a')) AS detalle
+FROM t
+
+UNION ALL
+SELECT
+  v.trans_num,
+  2,
+  IF(v.tardio, 'veredicto_tardio', 'veredicto'),
+  'Pub/Sub tx-preseleccionadas -> motor de reglas -> Pub/Sub tx-veredictos -> Cloud Run cierre -> Cloud SQL veredictos',
+  CAST(v.evaluado_at AS TIMESTAMP),
+  CONCAT(
+    'resultado=', IFNULL(CAST(v.resultado AS STRING), 'n/a'),
+    ' | reglas=', ARRAY_TO_STRING(IFNULL(JSON_VALUE_ARRAY(v.reglas_disparadas), []), ','),
+    ' | version_reglas=', IFNULL(CAST(v.version_reglas AS STRING), 'n/a')
+  )
+FROM raw.public_veredictos AS v
+
+UNION ALL
+SELECT
+  trans_num,
+  3,
+  'cierre',
+  'Cloud Run cierre -> Cloud SQL transacciones',
+  finalizada_at,
+  CONCAT('estado_final=', estado)
+FROM t
+WHERE finalizada_at IS NOT NULL
+
+UNION ALL
+SELECT
+  trans_num,
+  4,
+  'replica_cdc',
+  'Datastream -> BigQuery raw.public_transacciones y raw.public_veredictos',
+  CAST(NULL AS TIMESTAMP),
+  'fila replicada en raw'
+FROM t
+
+UNION ALL
+SELECT
+  trans_num,
+  5,
+  'modelo_analitico',
+  'Consulta programada -> analitica.fact_transacciones',
+  CAST(NULL AS TIMESTAMP),
+  CONCAT('estado=', estado, ' | latencia_cierre_seg=', IFNULL(CAST(latencia_cierre_seg AS STRING), 'n/a'))
+FROM analitica.fact_transacciones;
