@@ -1,0 +1,8 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+pydantic>=2.6,<3
+psycopg2-binary>=2.9,<3
+pg8000>=1.31,<2
+cloud-sql-python-connector>=1.12,<2
+google-cloud-pubsub>=2.21,<3
+google-cloud-secret-manager>=2.20,<3

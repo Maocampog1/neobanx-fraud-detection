@@ -8,3 +8,6 @@
 # Si solo se usa hmac_util con la clave en NEOBANX_HMAC_KEY (desarrollo local),
 # no hace falta ninguna dependencia: hmac y hashlib son de la librería estándar.
 google-cloud-secret-manager>=2.20,<3
+
+# holidays.py (festivos via Nager.Date) -- solo lo usa Backend/flink/.
+requests>=2.32,<3

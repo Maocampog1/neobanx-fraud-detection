@@ -8,6 +8,9 @@ terraform.tfvars
 
 # Datos
 *.csv
+# Excepcion: fixture pequeno (100 filas publicas de fraudTrain.csv, sin PII
+# real) que usa scripts/test.sh para la fase de carga sostenida en local.
+!scripts/fixtures/carga_local.csv
 
 # Python
 __pycache__/
@@ -21,3 +24,11 @@ Infrastructure/consumidor.zip
 
 # Claude Code (estado local de la herramienta, no del proyecto)
 .claude/
+
+# Puente local de pruebas del job de Flink (Backend/flink/), archivos de
+# transito -- nunca datos que deban persistir.
+Backend/flink/puente_local/
+
+# venv.zip del job de Flink (Backend/flink/empaquetar_venv.sh) -- ~350MB,
+# se reconstruye localmente o se sube directo al bucket de staging, nunca a git.
+Backend/flink/venv.zip

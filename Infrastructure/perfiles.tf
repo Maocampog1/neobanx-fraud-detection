@@ -59,6 +59,22 @@ resource "google_dataproc_job" "perfiles_redis" {
       // evita el sobrecosto de coordinar particiones vacías.
       "spark.sql.shuffle.partitions" = "8"
       "spark.executor.memory"        = "2g"
+
+      // Sin esto, PySpark usa por defecto el Python de CONDA
+      // (/opt/conda/default/bin, via PYSPARK_PYTHON que Dataproc exporta
+      // solo), no el de sistema -- confirmado contra la doc oficial
+      // ("Configure the Dataproc Python environment"). Pero
+      // instalar_dependencias_flink.sh instala las dependencias de este
+      // job (`google-cloud-secret-manager`, `redis`, etc.) en
+      // /usr/bin/python3 (el de sistema), porque eso es lo que necesita
+      // Flink -- ver ese script. Sin forzar esta propiedad, el job falla
+      // con "ImportError: cannot import name 'secretmanager' from
+      // 'google.cloud'" porque busca el paquete en el Python de conda,
+      // donde nunca se instaló. Apuntando ambos (driver y executors) al
+      // mismo Python de sistema, el job encuentra lo que ya se instaló
+      // para Flink, sin duplicar nada.
+      "spark.pyspark.python"        = "/usr/bin/python3"
+      "spark.pyspark.driver.python" = "/usr/bin/python3"
     }
   }
 

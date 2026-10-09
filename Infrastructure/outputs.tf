@@ -102,6 +102,7 @@ output "buckets" {
   description = "Buckets gestionados por este Terraform."
   value = {
     flink_checkpoints = google_storage_bucket.flink_checkpoints.name
+    flink_puente      = google_storage_bucket.flink_puente.name
     dataproc_staging  = google_storage_bucket.dataproc_staging.name
     dataproc_temp     = google_storage_bucket.dataproc_temp.name
   }
@@ -141,5 +142,23 @@ output "parametros_flujo" {
     timeout_veredicto_segundos = var.timeout_veredicto_segundos
     umbral_monto_preseleccion  = var.umbral_monto_preseleccion
     probabilidad_muestreo      = var.probabilidad_muestreo
+  }
+}
+
+// --- Cloud Run (flujo transaccional) -----------------------------------------
+
+output "cloud_run" {
+  description = <<-EOT
+    URLs de los 3 servicios del flujo transaccional (run.tf).
+
+    `registro` escala a 0 sin tráfico: no cobra en reposo. `cierre` y
+    `stub_veredicto` tienen `min_instance_count=1` (son *workers*
+    persistentes) y cobran todo el tiempo que estén desplegados, tengan
+    tráfico o no — destruirlos/apagarlos al terminar cada sesión de pruebas.
+  EOT
+  value = {
+    registro       = google_cloud_run_v2_service.registro.uri
+    cierre         = google_cloud_run_v2_service.cierre.uri
+    stub_veredicto = google_cloud_run_v2_service.stub_veredicto.uri
   }
 }

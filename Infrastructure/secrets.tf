@@ -189,6 +189,7 @@ locals {
     generador = "Generador de transacciones (Cloud Run Job)"
     registro  = "Servicio de registro y preselección (Cloud Run)"
     cierre    = "Servicio de cierre de veredictos y timeouts (Cloud Run)"
+    stub      = "Stub de veredicto -- reemplazo temporal de Flink (Cloud Run)"
     flink     = "Job de Apache Flink en Dataproc"
     agente    = "Agente de investigación de alertas (Vertex AI)"
     frontend  = "Frontend de demo (Cloud Run)"
@@ -273,6 +274,15 @@ locals {
       "roles/cloudsql.client",
       "roles/logging.logWriter",
     ] : "cierre|${r}" => { componente = "cierre", rol = r } },
+
+    // Stub de veredicto: mismo rol que Flink en el flujo (consume
+    // preseleccionadas, publica veredictos) pero sin Cloud SQL ni Dataproc --
+    // es temporal, se apaga en cuanto Flink este corriendo de verdad.
+    { for r in [
+      "roles/pubsub.subscriber",
+      "roles/pubsub.publisher",
+      "roles/logging.logWriter",
+    ] : "stub|${r}" => { componente = "stub", rol = r } },
 
     // Flink: consume preseleccionadas, publica veredictos, usa el bucket de
     // checkpoints y necesita ser worker de Dataproc.
