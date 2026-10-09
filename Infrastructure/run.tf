@@ -162,6 +162,19 @@ resource "google_cloud_run_v2_service" "cierre" {
       resources {
         // CPU siempre asignada: es un worker con dos loops en background, no
         // puede depender de recibir requests para que Cloud Run le de CPU.
+        //
+        // `limits` explicito a proposito: con un bloque `resources` que solo
+        // traia cpu_idle = false, la revision se desplegaba SIN CPU siempre
+        // asignada (confirmado el 2026-10-09: la anotacion
+        // run.googleapis.com/cpu-throttling no aparecia, el stub no procesaba
+        // ningun mensaje y cierre iba con minutos de retraso, asi que todas
+        // las preseleccionadas terminaban en timeout). Con los limits
+        // declarados, la configuracion se envia completa. Los valores son los
+        // mismos que Cloud Run asigna por defecto (1 CPU, 512Mi).
+        limits = {
+          cpu    = "1"
+          memory = "512Mi"
+        }
         cpu_idle = false
       }
 
@@ -221,6 +234,12 @@ resource "google_cloud_run_v2_service" "stub_veredicto" {
       image = local.stub_imagen
 
       resources {
+        // Mismo motivo que en cierre: sin `limits` explicitos, cpu_idle = false
+        // no llegaba a la revision desplegada y el stub no procesaba mensajes.
+        limits = {
+          cpu    = "1"
+          memory = "512Mi"
+        }
         cpu_idle = false
       }
 
