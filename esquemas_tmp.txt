@@ -1,0 +1,117 @@
+## raw.public_transacciones
+  trans_num	STRING		
+  cc_num_hash	STRING		
+  comercio	STRING		
+  categoria	STRING		
+  monto	NUMERIC		
+  fecha_hora_transaccion	TIMESTAMP		
+  lat_comercio	NUMERIC		
+  long_comercio	NUMERIC		
+  estado	STRING		
+  motivo_preseleccion	STRING		
+  created_at	TIMESTAMP		
+  deadline_at	TIMESTAMP		
+  finalizada_at	TIMESTAMP		
+  is_fraud_real	INTEGER		
+  datastream_metadata	RECORD		
+## raw.public_veredictos
+  veredicto_id	INTEGER		
+  trans_num	STRING		
+  resultado	STRING		
+  reglas_disparadas	JSON		
+  version_reglas	STRING		
+  evaluado_at	TIMESTAMP		
+  recibido_at	TIMESTAMP		
+  tardio	BOOLEAN		
+  datastream_metadata	RECORD		
+## raw.public_historial_estados
+  historial_id	INTEGER		
+  trans_num	STRING		
+  estado_anterior	STRING		
+  estado_nuevo	STRING		
+  cambiado_at	TIMESTAMP		
+  datastream_metadata	RECORD		
+## raw.public_clientes
+  cliente_id	INTEGER		
+  cliente_hash	STRING		
+  nombre_enmascarado	STRING		POLICY_TAG
+  apellido_enmascarado	STRING		POLICY_TAG
+  genero	STRING		POLICY_TAG
+  ciudad	STRING		POLICY_TAG
+  estado_geo	STRING		
+  codigo_postal	STRING		POLICY_TAG
+  poblacion_ciudad	INTEGER		
+  ocupacion	STRING		POLICY_TAG
+  fecha_nacimiento	DATE		POLICY_TAG
+  lat_hogar	NUMERIC		POLICY_TAG
+  long_hogar	NUMERIC		POLICY_TAG
+  created_at	TIMESTAMP		
+  datastream_metadata	RECORD		
+## raw.public_cuentas
+  cc_num_hash	STRING		
+  cliente_id	INTEGER		
+  created_at	TIMESTAMP		
+  datastream_metadata	RECORD		
+## analitica.fact_transacciones
+  trans_num	STRING		
+  fecha	DATE		
+  hora	INTEGER		
+  cliente_id	INTEGER		
+  comercio_id	INTEGER		
+  categoria	STRING		
+  estado	STRING		
+  monto	NUMERIC		
+  preseleccionada	BOOLEAN		
+  motivo_preseleccion	STRING		
+  resultado_veredicto	STRING		
+  reglas_disparadas	STRING	REPEATED	
+  version_reglas	STRING		
+  veredicto_tardio	BOOLEAN		
+  latencia_cierre_seg	FLOAT		
+  is_fraud_real	INTEGER		
+## analitica.dim_cliente
+  cliente_id	INTEGER		
+  estado_geo	STRING		
+  rango_edad	STRING		
+  tipo_ciudad	STRING		
+## analitica.dim_comercio
+  comercio_id	INTEGER		
+  comercio	STRING		
+  categoria_principal	STRING		
+## analitica.dim_tiempo
+  fecha	DATE		
+  anio	INTEGER		
+  mes	INTEGER		
+  dia	INTEGER		
+  dia_semana_num	INTEGER		
+  dia_semana	STRING		
+  es_fin_de_semana	BOOLEAN		
+  es_festivo	BOOLEAN		
+  nombre_festivo	STRING		
+## analitica.dim_estado
+  estado	STRING		
+  descripcion	STRING		
+  es_terminal	BOOLEAN		
+  fue_analizada	BOOLEAN		
+## analitica.clientes_enmascarados
+  cliente_id	INTEGER		
+  nombre	STRING		
+  apellido	STRING		
+  anio_nacimiento	INTEGER		
+  estado_geo	STRING		
+  codigo_postal_aprox	STRING		
+## analitica.festivos_us
+  fecha	DATE	NULLABLE	
+  nombre	STRING	NULLABLE	
+  nombre_local	STRING	NULLABLE	
+  global	BOOLEAN	NULLABLE	
+## analitica.dq_resultados
+  corrida_id	STRING		
+  ejecutado_at	TIMESTAMP		
+  regla	STRING		
+  dimension	STRING		
+  tabla	STRING		
+  descripcion	STRING		
+  filas_evaluadas	INTEGER		
+  filas_fallidas	INTEGER		
+  resultado	STRING		
