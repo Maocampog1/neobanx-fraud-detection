@@ -310,3 +310,202 @@ SELECT
   CAST(NULL AS TIMESTAMP),
   CONCAT('estado=', estado, ' | latencia_cierre_seg=', IFNULL(CAST(latencia_cierre_seg AS STRING), 'n/a'))
 FROM analitica.fact_transacciones;
+
+-- ---------------------------------------------------------------------------
+-- Vistas para el tablero (Looker Studio)
+-- ---------------------------------------------------------------------------
+-- Looker Studio trabaja mejor con tablas planas que con uniones. Estas vistas
+-- entregan el modelo ya unido y los KPIs ya calculados. No guardan datos: se
+-- calculan al consultarlas, así que siempre muestran lo último del modelo.
+--
+-- KPIs (sección 3.3 del documento del proyecto):
+--   1. % de fraude detectado en tiempo real   | SLA: latencia < 5 s
+--   2. % de falsos positivos                  | SLA: precisión de las reglas
+--   3. Ranking de operaciones más riesgosas   | SLA: tablero < 5 s
+--   4. % de transacciones completas           | SLA: completitud > 95 %
+--   5. % de alertas consistentes              | SLA: ACID, escritura < 5 s
+
+-- v_tablero_transacciones: una fila por transacción, con dimensiones y banderas
+-- 0/1 (en Looker se suman para obtener conteos y porcentajes).
+CREATE OR REPLACE VIEW analitica.v_tablero_transacciones
+OPTIONS (
+  description = 'Tablero: fact_transacciones unida con sus dimensiones, con banderas 0/1 para los KPIs. Fuente principal de Looker Studio.',
+  labels = [("data_owner", "gerencia_riesgo_fraude"), ("data_steward", "maria_ocampo"),
+            ("dominio", "analitica"), ("clasificacion", "interna"), ("capa", "analitica")]
+)
+AS
+WITH conteo_veredictos AS (
+  -- Cuántos veredictos tuvo cada transacción: sirve para el KPI 5
+  -- (alertas sin duplicar ni perder).
+  SELECT
+    trans_num,
+    COUNTIF(NOT tardio) AS n_a_tiempo,
+    COUNTIF(tardio)     AS n_tardios
+  FROM raw.public_veredictos
+  GROUP BY trans_num
+),
+base AS (
+  SELECT
+    f.*,
+    e.descripcion            AS estado_descripcion,
+    e.es_terminal,
+    e.fue_analizada,
+    t.dia_semana,
+    t.dia_semana_num,
+    t.es_fin_de_semana,
+    t.es_festivo,
+    t.nombre_festivo,
+    c.estado_geo,
+    c.rango_edad,
+    c.tipo_ciudad,
+    m.comercio,
+    IFNULL(v.n_a_tiempo, 0)  AS n_a_tiempo,
+    IFNULL(v.n_tardios, 0)   AS n_tardios
+  FROM analitica.fact_transacciones AS f
+  LEFT JOIN analitica.dim_estado    AS e USING (estado)
+  LEFT JOIN analitica.dim_tiempo    AS t USING (fecha)
+  LEFT JOIN analitica.dim_cliente   AS c USING (cliente_id)
+  LEFT JOIN analitica.dim_comercio  AS m USING (comercio_id)
+  LEFT JOIN conteo_veredictos       AS v USING (trans_num)
+)
+SELECT
+  trans_num,
+  fecha,
+  hora,
+  dia_semana,
+  dia_semana_num,
+  es_fin_de_semana,
+  es_festivo,
+  nombre_festivo,
+  categoria,
+  comercio,
+  estado_geo,
+  rango_edad,
+  tipo_ciudad,
+  estado,
+  estado_descripcion,
+  monto,
+  preseleccionada,
+  motivo_preseleccion,
+  resultado_veredicto,
+  ARRAY_TO_STRING(reglas_disparadas, ', ')                            AS reglas_disparadas,
+  version_reglas,
+  latencia_cierre_seg,
+  is_fraud_real,
+  n_a_tiempo                                                          AS n_veredictos_a_tiempo,
+  n_tardios                                                           AS n_veredictos_tardios,
+
+  -- Estados
+  IF(estado IN ('aprobada', 'bloqueada'), 1, 0)                       AS es_analizada,
+  IF(estado = 'bloqueada', 1, 0)                                      AS es_bloqueada,
+  IF(estado = 'no_preseleccionada_timeout', 1, 0)                     AS es_timeout,
+  IF(n_tardios > 0, 1, 0)                                             AS es_tardio,
+  IF(preseleccionada, 1, 0)                                           AS es_preseleccionada,
+
+  -- KPI 1 y 2: detección frente a la etiqueta real del dataset
+  IF(is_fraud_real = 1, 1, 0)                                         AS es_fraude_real,
+  IF(is_fraud_real = 1 AND estado = 'bloqueada', 1, 0)                AS es_fraude_detectado,
+  IF(is_fraud_real = 1 AND estado != 'bloqueada', 1, 0)               AS es_fraude_no_detectado,
+  IF(is_fraud_real = 0 AND estado = 'bloqueada', 1, 0)                AS es_falso_positivo,
+
+  -- SLA 1: analizada y cerrada en menos de 5 segundos
+  IF(estado IN ('aprobada', 'bloqueada') AND latencia_cierre_seg < 5, 1, 0) AS es_dentro_sla,
+
+  -- KPI 4: campos clave presentes
+  IF(cliente_id IS NOT NULL AND comercio_id IS NOT NULL AND categoria IS NOT NULL
+     AND monto IS NOT NULL AND fecha IS NOT NULL AND hora IS NOT NULL, 1, 0) AS es_completa,
+
+  -- KPI 5: cada alerta registrada una sola vez, sin pérdidas
+  IF(preseleccionada AND n_a_tiempo = 1 AND estado IN ('aprobada', 'bloqueada'), 1, 0) AS es_alerta_consistente,
+  IF(n_a_tiempo > 1, 1, 0)                                            AS es_alerta_duplicada,
+  IF(preseleccionada AND n_a_tiempo = 0, 1, 0)                        AS es_alerta_perdida,
+
+  -- Dinero: fraude frenado y fraude que se escapó
+  IF(is_fraud_real = 1 AND estado = 'bloqueada', monto, 0)            AS monto_fraude_bloqueado,
+  IF(is_fraud_real = 1 AND estado != 'bloqueada', monto, 0)           AS monto_fraude_no_detectado
+FROM base;
+
+-- v_tablero_kpis: UNA fila con los 5 KPIs y sus SLA, ya calculados.
+-- Alimenta las tarjetas (scorecards) del resumen ejecutivo.
+CREATE OR REPLACE VIEW analitica.v_tablero_kpis
+OPTIONS (
+  description = 'Tablero: los 5 KPIs del proyecto y sus SLA, en una sola fila.',
+  labels = [("data_owner", "gerencia_riesgo_fraude"), ("data_steward", "maria_ocampo"),
+            ("dominio", "analitica"), ("clasificacion", "interna"), ("capa", "analitica")]
+)
+AS
+SELECT
+  COUNT(*)                                                       AS total_transacciones,
+  SUM(es_preseleccionada)                                        AS preseleccionadas,
+  SUM(es_analizada)                                              AS analizadas,
+  SAFE_DIVIDE(SUM(es_analizada), COUNT(*))                       AS pct_analizadas,
+  SUM(es_bloqueada)                                              AS bloqueadas,
+  SUM(es_timeout)                                                AS timeouts,
+  SUM(es_tardio)                                                 AS tardios,
+
+  -- KPI 1 + SLA
+  SUM(es_fraude_real)                                            AS fraudes_reales,
+  SUM(es_fraude_detectado)                                       AS fraudes_detectados,
+  SAFE_DIVIDE(SUM(es_fraude_detectado), SUM(es_fraude_real))     AS kpi1_pct_fraude_detectado,
+  SAFE_DIVIDE(SUM(es_dentro_sla), SUM(es_analizada))             AS sla1_pct_dentro_5s,
+  APPROX_QUANTILES(IF(es_analizada = 1, latencia_cierre_seg, NULL), 100)[SAFE_OFFSET(95)]
+                                                                 AS sla1_latencia_p95_seg,
+
+  -- KPI 2 + SLA
+  SUM(es_falso_positivo)                                         AS falsos_positivos,
+  SAFE_DIVIDE(SUM(es_falso_positivo), SUM(es_bloqueada))         AS kpi2_pct_falsos_positivos,
+  SAFE_DIVIDE(SUM(es_fraude_detectado), SUM(es_bloqueada))       AS sla2_precision_reglas,
+
+  -- KPI 4 + SLA
+  SAFE_DIVIDE(SUM(es_completa), COUNT(*))                        AS kpi4_pct_completitud,
+  0.95                                                           AS sla4_meta_completitud,
+
+  -- KPI 5
+  SAFE_DIVIDE(SUM(es_alerta_consistente), SUM(es_preseleccionada)) AS kpi5_pct_alertas_consistentes,
+  SUM(es_alerta_duplicada)                                       AS alertas_duplicadas,
+  SUM(es_alerta_perdida)                                         AS alertas_perdidas,
+
+  -- Dinero
+  SUM(monto_fraude_bloqueado)                                    AS monto_fraude_bloqueado,
+  SUM(monto_fraude_no_detectado)                                 AS monto_fraude_no_detectado
+FROM analitica.v_tablero_transacciones;
+
+-- v_tablero_categorias: KPI 3, ranking de categorías por tasa de fraude.
+CREATE OR REPLACE VIEW analitica.v_tablero_categorias
+OPTIONS (
+  description = 'Tablero: KPI 3, ranking de categorías de comercio por tasa de fraude real y tasa de bloqueo.',
+  labels = [("data_owner", "gerencia_riesgo_fraude"), ("data_steward", "maria_ocampo"),
+            ("dominio", "analitica"), ("clasificacion", "interna"), ("capa", "analitica")]
+)
+AS
+SELECT
+  categoria,
+  COUNT(*)                                                       AS transacciones,
+  SUM(es_fraude_real)                                            AS fraudes_reales,
+  SAFE_DIVIDE(SUM(es_fraude_real), COUNT(*))                     AS tasa_fraude,
+  SUM(es_bloqueada)                                              AS bloqueadas,
+  SAFE_DIVIDE(SUM(es_bloqueada), COUNT(*))                       AS tasa_bloqueo,
+  SAFE_DIVIDE(SUM(es_fraude_detectado), SUM(es_fraude_real))     AS pct_fraude_detectado,
+  SUM(monto)                                                     AS monto_total,
+  RANK() OVER (ORDER BY SAFE_DIVIDE(SUM(es_fraude_real), COUNT(*)) DESC) AS ranking_riesgo
+FROM analitica.v_tablero_transacciones
+GROUP BY categoria;
+
+-- v_tablero_reglas: una fila por regla disparada en cada transacción bloqueada.
+CREATE OR REPLACE VIEW analitica.v_tablero_reglas
+OPTIONS (
+  description = 'Tablero: una fila por regla disparada en cada transacción bloqueada, con la etiqueta real para ver qué regla acierta más.',
+  labels = [("data_owner", "gerencia_riesgo_fraude"), ("data_steward", "maria_ocampo"),
+            ("dominio", "analitica"), ("clasificacion", "interna"), ("capa", "analitica")]
+)
+AS
+SELECT
+  f.trans_num,
+  f.fecha,
+  f.categoria,
+  f.monto,
+  regla,
+  f.is_fraud_real
+FROM analitica.fact_transacciones AS f,
+  UNNEST(f.reglas_disparadas) AS regla
+WHERE f.resultado_veredicto = 'bloqueada';
