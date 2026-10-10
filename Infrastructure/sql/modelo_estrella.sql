@@ -26,6 +26,12 @@
 --   generalizados (inicial, año, código postal truncado), sin ciudad ni
 --   coordenadas (Documentation/reglas_calidad_neobanx.md, sección 6).
 --
+-- CATÁLOGO (Dataplex)
+--   Cada objeto lleva descripción y etiquetas de gobierno: data_owner,
+--   data_steward, dominio, clasificacion y capa. Van aquí (no en un script
+--   aparte) porque CREATE OR REPLACE recrea la tabla cada 15 minutos y
+--   borraría cualquier etiqueta puesta desde afuera.
+--
 -- TIPOS
 --   Los CAST a DATE/TIMESTAMP son a propósito: hacen que el script funcione
 --   igual si Datastream replica una columna como DATETIME o como TIMESTAMP.
@@ -33,7 +39,13 @@
 -- ---------------------------------------------------------------------------
 -- dim_estado: los 6 estados de la máquina de estados de `transacciones`
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE TABLE analitica.dim_estado AS
+CREATE OR REPLACE TABLE analitica.dim_estado
+OPTIONS (
+  description = 'Dimensión de estados: los 6 estados de la máquina de estados de una transacción.',
+  labels = [("data_owner", "gerencia_riesgo_fraude"), ("data_steward", "maria_ocampo"),
+            ("dominio", "analitica"), ("clasificacion", "interna"), ("capa", "analitica")]
+)
+AS
 SELECT * FROM UNNEST([
   STRUCT(
     'recibida'                    AS estado,
@@ -52,7 +64,13 @@ SELECT * FROM UNNEST([
 -- dim_tiempo: un día por fila, con la bandera de festivo (Nager.Date)
 -- ---------------------------------------------------------------------------
 -- El rango cubre todo el dataset Sparkov (2019-2020) con margen.
-CREATE OR REPLACE TABLE analitica.dim_tiempo AS
+CREATE OR REPLACE TABLE analitica.dim_tiempo
+OPTIONS (
+  description = 'Dimensión de tiempo: un día por fila (2019-2021) con día de la semana, fin de semana y festivos de EE. UU. (Nager.Date).',
+  labels = [("data_owner", "gerencia_riesgo_fraude"), ("data_steward", "maria_ocampo"),
+            ("dominio", "analitica"), ("clasificacion", "publica"), ("capa", "analitica")]
+)
+AS
 SELECT
   d                                   AS fecha,
   EXTRACT(YEAR FROM d)                AS anio,
@@ -78,7 +96,13 @@ LEFT JOIN (
 -- La edad se calcula contra el final del dataset (2020-12-31), no contra
 -- hoy, para que el rango sea estable y coherente con las fechas de las
 -- transacciones.
-CREATE OR REPLACE TABLE analitica.dim_cliente AS
+CREATE OR REPLACE TABLE analitica.dim_cliente
+OPTIONS (
+  description = 'Dimensión de clientes SIN PII: estado (geográfico), rango de edad y tipo de ciudad.',
+  labels = [("data_owner", "gerencia_riesgo_fraude"), ("data_steward", "maria_ocampo"),
+            ("dominio", "analitica"), ("clasificacion", "interna"), ("capa", "analitica")]
+)
+AS
 SELECT
   cliente_id,
   estado_geo,
@@ -114,7 +138,13 @@ FROM (
 --   fecha_nacimiento -> solo el año
 --   codigo_postal    -> primeros 3 dígitos + 'XX'
 --   ciudad, coordenadas, género y ocupación -> se omiten
-CREATE OR REPLACE TABLE analitica.clientes_enmascarados AS
+CREATE OR REPLACE TABLE analitica.clientes_enmascarados
+OPTIONS (
+  description = 'Clientes con PII enmascarada por generalización (inicial + ***, año de nacimiento, código postal truncado). Sin ciudad ni coordenadas.',
+  labels = [("data_owner", "oficial_proteccion_datos"), ("data_steward", "maria_ocampo"),
+            ("dominio", "clientes"), ("clasificacion", "pii_enmascarada"), ("capa", "analitica")]
+)
+AS
 SELECT
   cliente_id,
   CONCAT(SUBSTR(CAST(nombre_enmascarado AS STRING), 1, 1), '***')   AS nombre,
@@ -130,7 +160,13 @@ FROM raw.public_clientes;
 -- El generador ya quita el prefijo `fraud_`; se vuelve a quitar aquí como
 -- red de seguridad, porque es una convención del dataset, no una señal de
 -- fraude (Documentation/reglas_calidad_neobanx.md, sección 5).
-CREATE OR REPLACE TABLE analitica.dim_comercio AS
+CREATE OR REPLACE TABLE analitica.dim_comercio
+OPTIONS (
+  description = 'Dimensión de comercios (sin el prefijo fraud_ del dataset) con su categoría principal.',
+  labels = [("data_owner", "gerencia_riesgo_fraude"), ("data_steward", "maria_ocampo"),
+            ("dominio", "analitica"), ("clasificacion", "interna"), ("capa", "analitica")]
+)
+AS
 SELECT
   FARM_FINGERPRINT(comercio) AS comercio_id,
   comercio,
@@ -147,6 +183,11 @@ GROUP BY comercio;
 CREATE OR REPLACE TABLE analitica.fact_transacciones
 PARTITION BY fecha
 CLUSTER BY estado, categoria
+OPTIONS (
+  description = 'Hechos: una fila por transacción (grano). Estado final, veredicto efectivo, reglas disparadas y latencia de cierre. Particionada por fecha.',
+  labels = [("data_owner", "gerencia_riesgo_fraude"), ("data_steward", "maria_ocampo"),
+            ("dominio", "analitica"), ("clasificacion", "interna"), ("capa", "analitica")]
+)
 AS
 WITH veredicto_efectivo AS (
   -- Una transacción puede tener más de un veredicto (uno a tiempo y otro
@@ -192,7 +233,6 @@ FROM raw.public_transacciones AS t
 LEFT JOIN raw.public_cuentas  AS q USING (cc_num_hash)
 LEFT JOIN veredicto_efectivo  AS v USING (trans_num);
 
-
 -- ---------------------------------------------------------------------------
 -- linaje_transaccion: el recorrido de UNA transacción por la plataforma
 -- ---------------------------------------------------------------------------
@@ -202,7 +242,11 @@ LEFT JOIN veredicto_efectivo  AS v USING (trans_num);
 --   WHERE trans_num = '...' ORDER BY orden;
 -- Va al final porque lee fact_transacciones, que se crea justo arriba.
 CREATE OR REPLACE VIEW analitica.linaje_transaccion
-OPTIONS (description = 'Recorrido de cada transacción: registro, veredicto, cierre, réplica CDC y modelo analítico')
+OPTIONS (
+  description = 'Linaje por transacción: registro, veredicto, cierre, réplica CDC y modelo analítico, en orden.',
+  labels = [("data_owner", "gerencia_riesgo_fraude"), ("data_steward", "maria_ocampo"),
+            ("dominio", "gobierno"), ("clasificacion", "interna"), ("capa", "analitica")]
+)
 AS
 WITH t AS (
   SELECT

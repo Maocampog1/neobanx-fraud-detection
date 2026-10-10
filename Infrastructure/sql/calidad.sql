@@ -42,6 +42,13 @@ CREATE TABLE IF NOT EXISTS analitica.dq_resultados (
 PARTITION BY DATE(ejecutado_at)
 OPTIONS (description = 'Histórico de resultados de las reglas de calidad (calidad.sql)');
 
+-- Etiquetas de gobierno para Dataplex Catalog. Va como ALTER porque
+-- CREATE TABLE IF NOT EXISTS no toca la tabla si ya existe.
+ALTER TABLE analitica.dq_resultados SET OPTIONS (
+  labels = [("data_owner", "gerencia_riesgo_fraude"), ("data_steward", "maria_ocampo"),
+            ("dominio", "calidad"), ("clasificacion", "interna"), ("capa", "analitica")]
+);
+
 INSERT INTO analitica.dq_resultados
 WITH reglas AS (
   SELECT
@@ -123,7 +130,13 @@ SELECT
 FROM reglas;
 
 -- Vista para el dashboard: solo la última corrida (semáforo actual).
-CREATE OR REPLACE VIEW analitica.dq_ultima_corrida AS
+CREATE OR REPLACE VIEW analitica.dq_ultima_corrida
+OPTIONS (
+  description = 'Semáforo de calidad: resultado de las 6 reglas en la corrida más reciente.',
+  labels = [("data_owner", "gerencia_riesgo_fraude"), ("data_steward", "maria_ocampo"),
+            ("dominio", "calidad"), ("clasificacion", "interna"), ("capa", "analitica")]
+)
+AS
 SELECT *
 FROM analitica.dq_resultados
 WHERE corrida_id = (
