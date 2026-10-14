@@ -214,4 +214,16 @@ resource "google_dataproc_cluster" "flink" {
   // Cada uno de estos, omitido, produce un error distinto y ninguno evidente.
   // Hay que declararlos a mano o el despliegue funciona solo por azar en el
   // orden que elija Terraform.
+
+  // Google expande "cloud-platform" con scopes adicionales al crear el clúster
+  // (devstorage, logging, useraccounts). Terraform veía esa diferencia como un
+  // cambio y RECREABA el clúster en cada `apply` (~10 min), aunque nada hubiera
+  // cambiado. Se confirmó el 2026-10-09: un deploy que solo agregaba recursos
+  // de BigQuery reemplazó el clúster por esta diferencia. Ignorar el campo es
+  // seguro: el acceso real lo dan los roles de sa-flink, no los scopes.
+  lifecycle {
+    ignore_changes = [
+      cluster_config[0].gce_cluster_config[0].service_account_scopes,
+    ]
+  }
 }

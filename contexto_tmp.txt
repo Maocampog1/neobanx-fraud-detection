@@ -1,0 +1,550 @@
+﻿===== Backend\common\db_conexion.py =====
+"""Conexion a Cloud SQL, compartida entre el servicio de registro y el de
+cierre -- los dos necesitan la misma logica de conexion, solo cambia el rol.
+
+Dos modos, elegidos por variables de entorno:
+
+  - Local (desarrollo): `DATABASE_URL` -- cadena de conexion normal de
+    psycopg2 contra un Postgres cualquiera (ej. el contenedor Docker local).
+  - Nube: `INSTANCE_CONNECTION_NAME` -- usa el Cloud SQL Python Connector
+    (no el Auth Proxy, los servicios no lo necesitan) con el driver pg8000,
+    y la contrasena del rol se lee de Secret Manager (`DB_PASSWORD_SECRET`).
+
+Ambos devuelven una conexion DB-API 2.0 normal (`cursor()`, `execute(sql,
+params)`, `commit()`) -- el codigo que las usa no necesita saber cual es.
+"""
+
+import os
+import threading
+
+# Cache a nivel de proceso del Connector y la contrasena -- ver
+# _conectar_nube para por que hace falta.
+_candado = threading.Lock()
+_connector_cache = {"conector": None, "password": None}
+
+
+def conectar():
+    instance_connection_name = os.environ.get("INSTANCE_CONNECTION_NAME")
+    db_name = os.environ.get("DB_NAME", "neobanx")
+    db_user = os.environ["DB_USER"]
+
+    if instance_connection_name:
+        return _conectar_nube(instance_connection_name, db_user, db_name)
+    return _conectar_local(db_user, db_name)
+
+
+def _conectar_local(db_user: str, db_name: str):
+    import psycopg2
+
+    database_url = os.environ.get("DATABASE_URL")
+    if database_url:
+        return psycopg2.connect(database_url)
+
+    # Variante sin DATABASE_URL completa: arma la cadena a partir de piezas
+    # sueltas, utÃ­l para los contenedores locales de prueba.
+    return psycopg2.connect(
+        host=os.environ.get("DB_HOST", "127.0.0.1"),
+        port=int(os.environ.get("DB_PORT", "5555")),
+        user=db_user,
+        password=os.environ["DB_PASSWORD_LOCAL"],
+        dbname=db_name,
+    )
+
+
+def _conectar_nube(instance_connection_name: str, db_user: str, db_name: str):
+    # `registro` llama conectar() una vez por request, serializado -- nunca
+    # fue un problema ahi. `cierre` es un proceso de larga vida que llama
+    # esto desde el monitor de timeouts Y desde el callback de Pub/Sub, a
+    # veces al mismo tiempo. Creando un Connector() nuevo cada vez (como
+    # hacia esta funcion antes), cada uno abre su propio hilo de fondo para
+    # renovar certificados contra la API de Cloud SQL -- bajo carga
+    # concurrente, varios compitiendo a la vez producian
+    # "BrokenPipeError"/"DeadlineExceeded" al refrescar, confirmado en los
+    # logs reales de `cierre` durante una prueba de carga. Cachear UN solo
+    # Connector (y la contrasena, que no cambia en la vida del proceso) por
+    # proceso resuelve esto -- es el patron que la propia documentacion del
+    # conector recomienda.
+    with _candado:
+        if _connector_cache["password"] is None:
+            from google.cloud import secretmanager
+
+            secreto_id = os.environ["DB_PASSWORD_SECRET"]
+            proyecto = os.environ["GOOGLE_CLOUD_PROJECT"]
+            cliente = secretmanager.SecretManagerServiceClient()
+            nombre = f"projects/{proyecto}/secrets/{secreto_id}/versions/latest"
+            _connector_cache["password"] = cliente.access_secret_version(name=nombre).payload.data.decode("utf-8")
+
+        if _connector_cache["conector"] is None:
+            from google.cloud.sql.connector import Connector
+
+            _connector_cache["conector"] = Connector()
+
+    return _connector_cache["conector"].connect(
+        instance_connection_name,
+        "pg8000",
+        user=db_user,
+        password=_connector_cache["password"],
+        db=db_name,
+    )
+
+===== Backend\common\hmac_util.py =====
+"""TokenizaciÃ³n determinÃ­stica del nÃºmero de tarjeta (cc_num).
+
+POR QUÃ‰ EXISTE ESTE MÃ“DULO
+--------------------------
+`Documentation/reglas_calidad_neobanx.md` exige que `cc_num` nunca salga de la
+capa transaccional en texto plano, y que su tokenizaciÃ³n sea **HMAC-SHA256 con
+una clave secreta fija guardada en Secret Manager**.
+
+El generador del Sprint 1 no cumplÃ­a eso:
+
+    digest = hashlib.sha256(f"{SALT}{cc_num}".encode("utf-8")).hexdigest()
+    return digest[:10]
+
+Tres problemas:
+
+1. **No es HMAC.** Concatenar `salt + mensaje` y pasarlo por SHA-256 es un
+   patrÃ³n vulnerable a extensiÃ³n de longitud y no es lo que piden las reglas
+   de calidad. HMAC existe precisamente para combinar clave y mensaje bien.
+
+2. **Truncaba a 10 caracteres hex** (40 bits). Con ~1000 tarjetas el riesgo de
+   colisiÃ³n todavÃ­a es bajo, pero truncar un token que es llave primaria de
+   `cuentas` y llave forÃ¡nea de `transacciones` no tiene ninguna ventaja y sÃ­
+   un riesgo real si el volumen crece.
+
+3. **No normalizaba el valor de entrada**, y ahÃ­ estaba el defecto mÃ¡s grave.
+   `Backend/generador/main.py` lee el CSV con `pd.read_csv(..., chunksize=N)`
+   sin declarar `dtype` para `cc_num`, asÃ­ que pandas **infiere el tipo bloque
+   por bloque**. Un bloque puede inferir `int64` y otro `float64` (por un valor
+   que no quepa en int64 o por un NaN), y entonces `f"{cc_num}"` produce
+   `"4532015112830366"` en un caso y `"4532015112830366.0"` en el otro: dos
+   hashes distintos para la misma tarjeta. El resultado es un join silenciosamente
+   roto entre `cuentas` y `transacciones`, sin ningÃºn error visible.
+
+Por eso `hash_cc_num` normaliza SIEMPRE antes de hashear, y acepta `str`, `int`,
+`float`, tipos de numpy y notaciÃ³n cientÃ­fica dando el mismo resultado para
+todos.
+
+ARREGLO COMPLEMENTARIO EN EL ORIGEN
+-----------------------------------
+Este mÃ³dulo blinda el cÃ¡lculo, pero lo correcto es ademÃ¡s no dejar que pandas
+adivine. Al leer el CSV conviene declarar el tipo explÃ­citamente:
+
+    pd.read_csv(ruta, dtype={"cc_num": "string"}, ...)
+
+AsÃ­ `cc_num` llega como texto en todos los bloques y la normalizaciÃ³n de aquÃ­
+se vuelve una red de seguridad en lugar de la Ãºnica defensa.
+
+ADVERTENCIA OPERATIVA â€” ROTAR LA CLAVE INVALIDA TODOS LOS HASHES
+----------------------------------------------------------------
+El token es determinÃ­stico *para una clave dada*. Si se rota la clave del
+secreto, todos los `cc_num_hash` ya almacenados dejan de corresponder: habrÃ­a
+que recalcular `clientes`, `cuentas` y `transacciones` completos en la misma
+operaciÃ³n. No es una clave que se rote por rutina; trÃ¡tenla como parte del
+esquema de datos, no como una credencial cualquiera.
+
+USO
+---
+    from hmac_util import hash_cc_num
+
+    token = hash_cc_num("4532015112830366")   # 64 caracteres hex
+
+ResoluciÃ³n de la clave, en orden de precedencia:
+
+1. Variable de entorno `NEOBANX_HMAC_KEY` â€” solo para desarrollo local y
+   pruebas. Si se usa en un entorno real, los hashes NO van a coincidir con
+   los de producciÃ³n.
+2. Secret Manager: secreto `NEOBANX_HMAC_SECRET_ID` (por defecto
+   `neobanx-hmac-cc-num`) del proyecto `GOOGLE_CLOUD_PROJECT` o `PROJECT_ID`.
+
+La clave se lee una sola vez y queda en cachÃ© en memoria: el generador hashea
+miles de filas y una llamada a Secret Manager por fila serÃ­a inviable.
+"""
+
+from __future__ import annotations
+
+import hmac
+import hashlib
+import os
+import re
+import threading
+from decimal import Decimal, InvalidOperation
+from typing import Iterable, Iterator
+
+__all__ = [
+    "hash_cc_num",
+    "hash_cc_nums",
+    "normalizar_cc_num",
+    "obtener_clave",
+    "limpiar_cache_clave",
+    "LONGITUD_HASH_HEX",
+]
+
+# HMAC-SHA256 en hexadecimal: 32 bytes -> 64 caracteres. Sin truncar.
+LONGITUD_HASH_HEX = 64
+
+# Nombre por defecto del secreto en Secret Manager.
+SECRETO_POR_DEFECTO = "neobanx-hmac-cc-num"
+
+# Variables de entorno reconocidas.
+ENV_CLAVE_DIRECTA = "NEOBANX_HMAC_KEY"
+ENV_SECRETO_ID = "NEOBANX_HMAC_SECRET_ID"
+ENV_SECRETO_VERSION = "NEOBANX_HMAC_SECRET_VERSION"
+ENV_PROYECTOS = ("GOOGLE_CLOUD_PROJECT", "PROJECT_ID", "GCP_PROJECT_ID")
+
+# Rango admisible de dÃ­gitos. Las tarjetas reales tienen entre 12 y 19; se deja
+# un margen para no rechazar datos sintÃ©ticos razonables, pero sÃ­ atrapar
+# basura evidente (cadenas vacÃ­as, texto, identificadores de otra cosa).
+MIN_DIGITOS = 8
+MAX_DIGITOS = 24
+
+_SOLO_DIGITOS = re.compile(r"\A\d+\Z")
+# Solo espacios y guiones: son los Ãºnicos separadores plausibles en un nÃºmero
+# de tarjeta escrito a mano ("4532 0151 1283 0366"). El punto NO va aquÃ­ a
+# propÃ³sito: quitarlo convertirÃ­a el "0" decimal de "4532015112830366.0" en un
+# dÃ­gito mÃ¡s del nÃºmero, produciendo un token equivocado en silencio.
+_SEPARADORES = re.compile(r"[\s\-]+")
+
+_clave_cache: bytes | None = None
+_candado = threading.Lock()
+
+
+# ---------------------------------------------------------------------------
+# NormalizaciÃ³n
+# ---------------------------------------------------------------------------
+
+def normalizar_cc_num(cc_num: object) -> str:
+    """Devuelve el `cc_num` como cadena canÃ³nica de solo dÃ­gitos.
+
+    Garantiza que entradas equivalentes produzcan la MISMA cadena, sin
+    importar de quÃ© tipo vengan:
+
+        "4532015112830366"      -> "4532015112830366"
+        4532015112830366        -> "4532015112830366"   (int / numpy.int64)
+        4532015112830366.0      -> "4532015112830366"   (float / numpy.float64)
+        "4.532015112830366e+15" -> "4532015112830366"   (notaciÃ³n cientÃ­fica)
+        "4532 0151 1283 0366"   -> "4532015112830366"   (con separadores)
+
+    Lanza `ValueError` ante cualquier entrada que no represente un nÃºmero de
+    tarjeta plausible. Fallar aquÃ­ es deliberado: un `cc_num` ilegible que se
+    hashee de todas formas produce una cuenta fantasma que rompe el join sin
+    dar ninguna seÃ±al.
+    """
+    if cc_num is None:
+        raise ValueError("cc_num es None: no se puede tokenizar")
+
+    texto = str(cc_num).strip()
+    if not texto:
+        raise ValueError("cc_num vacÃ­o: no se puede tokenizar")
+
+    if texto.lower() in {"nan", "none", "null", "<na>"}:
+        raise ValueError(f"cc_num no es un nÃºmero vÃ¡lido: {texto!r}")
+
+    # --- Paso 1: caso rÃ¡pido, ya es una cadena de solo dÃ­gitos.
+    # Va primero porque es tambiÃ©n el Ãºnico camino que preserva los ceros a la
+    # izquierda: "0123..." debe seguir siendo "0123...", y cualquier
+    # interpretaciÃ³n numÃ©rica los perderÃ­a.
+    if _SOLO_DIGITOS.match(texto):
+        return _validar_longitud(texto, cc_num)
+
+    # --- Paso 2: valor numÃ©rico (float, notaciÃ³n cientÃ­fica, con signo).
+    # Este paso va ANTES de quitar separadores. El orden es esencial: si se
+    # quitaran primero, el punto de "4532015112830366.0" desaparecerÃ­a y el "0"
+    # decimal pasarÃ­a a ser un dÃ­gito del nÃºmero, y el signo de un negativo se
+    # perderÃ­a sin que nadie lo note.
+    # Decimal (y no float) para evitar el redondeo binario, y format(..., "f")
+    # para no reintroducir notaciÃ³n cientÃ­fica al convertir de vuelta a texto.
+    try:
+        numero = Decimal(texto)
+    except InvalidOperation:
+        numero = None
+
+    if numero is not None:
+        if not numero.is_finite():
+            raise ValueError(f"cc_num no es finito: {cc_num!r}")
+
+        # La comparaciÃ³n con 0 debe ir despuÃ©s de is_finite(): comparar un NaN
+        # de Decimal lanza InvalidOperation.
+        if numero < 0:
+            raise ValueError(f"cc_num negativo: {cc_num!r}")
+
+        entero = numero.to_integral_value()
+        if numero != entero:
+            # Un nÃºmero de tarjeta no tiene parte decimal. Si llegÃ³ una, algo
+            # se corrompiÃ³ antes y es mejor detenerse que inventar un token.
+            raise ValueError(
+                f"cc_num tiene parte decimal, no es un nÃºmero de tarjeta: {cc_num!r}"
+            )
+
+        canonico = format(entero, "f")
+        if canonico.endswith("."):
+            canonico = canonico[:-1]
+
+        if not _SOLO_DIGITOS.match(canonico):
+            raise ValueError(f"cc_num no normalizable: {cc_num!r}")
+
+        return _validar_longitud(canonico, cc_num)
+
+    # --- Paso 3: tarjeta escrita con separadores ("4532 0151 1283 0366").
+    # Solo se llega aquÃ­ si Decimal no pudo interpretarlo, asÃ­ que no hay riesgo
+    # de estar mutilando un decimal o un signo.
+    sin_separadores = _SEPARADORES.sub("", texto)
+    if _SOLO_DIGITOS.match(sin_separadores):
+        return _validar_longitud(sin_separadores, cc_num)
+
+    raise ValueError(f"cc_num no es un nÃºmero vÃ¡lido: {cc_num!r}")
+
+
+def _validar_longitud(digitos: str, original: object) -> str:
+    # Los ceros a la izquierda son significativos en un cc_num, asÃ­ que no se
+    # eliminan: "0123..." y "123..." son tarjetas distintas.
+    if not (MIN_DIGITOS <= len(digitos) <= MAX_DIGITOS):
+        raise ValueError(
+            f"cc_num con {len(digitos)} dÃ­gitos, fuera del rango "
+            f"[{MIN_DIGITOS}, {MAX_DIGITOS}]: {original!r}"
+        )
+    return digitos
+
+
+# ---------------------------------------------------------------------------
+# Clave
+# ---------------------------------------------------------------------------
+
+def obtener_clave(forzar_recarga: bool = False) -> bytes:
+    """Devuelve la clave HMAC, leyÃ©ndola una sola vez y dejÃ¡ndola en cachÃ©.
+
+    Con `forzar_recarga=True` descarta la cachÃ© y vuelve a resolverla (Ãºtil en
+    pruebas; en producciÃ³n no deberÃ­a hacer falta).
+    """
+    global _clave_cache
+
+    if _clave_cache is not None and not forzar_recarga:
+        return _clave_cache
+
+    with _candado:
+        # Otro hilo pudo haberla cargado mientras esperÃ¡bamos el candado.
+        if _clave_cache is not None and not forzar_recarga:
+            return _clave_cache
+
+        clave = _resolver_clave()
+        if not clave:
+            raise RuntimeError("La clave HMAC resolviÃ³ a un valor vacÃ­o")
+
+        _clave_cache = clave
+        return _clave_cache
+
+
+def _resolver_clave() -> bytes:
+    directa = os.environ.get(ENV_CLAVE_DIRECTA)
+    if directa:
+        # Camino de desarrollo local y pruebas. No se usa en GCP.
+        return directa.encode("utf-8")
+
+    secreto_id = os.environ.get(ENV_SECRETO_ID, SECRETO_POR_DEFECTO)
+    version = os.environ.get(ENV_SECRETO_VERSION, "latest")
+    proyecto = _resolver_proyecto()
+
+    try:
+        from google.cloud import secretmanager
+    except ImportError as exc:
+        raise RuntimeError(
+            "Falta la dependencia google-cloud-secret-manager. "
+            f"InstÃ¡lala, o define {ENV_CLAVE_DIRECTA} si estÃ¡s en local."
+        ) from exc
+
+    cliente = secretmanager.SecretManagerServiceClient()
+    nombre = f"projects/{proyecto}/secrets/{secreto_id}/versions/{version}"
+    try:
+        respuesta = cliente.access_secret_version(request={"name": nombre})
+    except Exception as exc:
+        raise RuntimeError(
+            f"No se pudo leer la clave HMAC de Secret Manager ({nombre}). "
+            "Verifica que el secreto exista y que la cuenta de servicio tenga "
+            "roles/secretmanager.secretAccessor sobre Ã©l."
+        ) from exc
+
+    return respuesta.payload.data
+
+
+def _resolver_proyecto() -> str:
+    for variable in ENV_PROYECTOS:
+        valor = os.environ.get(variable)
+        if valor:
+            return valor
+    raise RuntimeError(
+        "No se pudo determinar el proyecto de GCP para leer la clave HMAC. "
+        f"Define una de: {', '.join(ENV_PROYECTOS)}, "
+        f"o usa {ENV_CLAVE_DIRECTA} en local."
+    )
+
+
+def limpiar_cache_clave() -> None:
+    """Olvida la clave en cachÃ©. Pensado para pruebas."""
+    global _clave_cache
+    with _candado:
+        _clave_cache = None
+
+
+# ---------------------------------------------------------------------------
+# TokenizaciÃ³n
+# ---------------------------------------------------------------------------
+
+def hash_cc_num(cc_num: object) -> str:
+    """Tokeniza un `cc_num` con HMAC-SHA256 y lo devuelve en hex (64 chars).
+
+    DeterminÃ­stico: la misma tarjeta y la misma clave dan siempre el mismo
+    token, que es lo que permite unir `cuentas` con `transacciones`.
+    """
+    normalizado = normalizar_cc_num(cc_num)
+    clave = obtener_clave()
+    return hmac.new(clave, normalizado.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def hash_cc_nums(cc_nums: Iterable[object]) -> Iterator[str]:
+    """VersiÃ³n perezosa para lotes (carga de `clientes` y `cuentas`).
+
+    Resuelve la clave una sola vez para todo el lote en lugar de consultar la
+    cachÃ© en cada elemento.
+    """
+    clave = obtener_clave()
+    for cc_num in cc_nums:
+        normalizado = normalizar_cc_num(cc_num)
+        yield hmac.new(clave, normalizado.encode("utf-8"), hashlib.sha256).hexdigest()
+
+===== contracts\transaccion.py =====
+"""Evento de transaccion -- generador -> servicio de registro (HTTP POST).
+
+Reemplaza el contrato v1 (publicacion directa a Pub/Sub, ver
+Backend/contrato_datos_generador.md). Los nombres de campo ya coinciden con
+las columnas de `transacciones` en schema.sql, para que el servicio de
+registro pueda insertar casi sin traducir nombres.
+"""
+
+import re
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
+
+_HEX_64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+class TransaccionEvento(BaseModel):
+    trans_num: str = Field(min_length=1, max_length=64)
+    cc_num_hash: str = Field(
+        description="HMAC-SHA256 de 64 hex, producido por Backend/common/hmac_util.hash_cc_num"
+    )
+    comercio: str = Field(min_length=1)
+    categoria: str = Field(min_length=1)
+    monto: float = Field(gt=0)
+    fecha_hora_transaccion: datetime
+    lat_comercio: float = Field(ge=-90, le=90)
+    long_comercio: float = Field(ge=-180, le=180)
+    is_fraud_real: Literal[0, 1] = Field(
+        description="Solo para medir falsos positivos despues. NUNCA se usa como entrada de una regla de deteccion."
+    )
+
+    @field_validator("cc_num_hash")
+    @classmethod
+    def _validar_hash(cls, v: str) -> str:
+        if not _HEX_64.match(v):
+            raise ValueError("cc_num_hash debe ser HMAC-SHA256 hex de 64 caracteres sin truncar")
+        return v
+
+===== Backend\registro\Dockerfile =====
+# Build context: la RAIZ del repo (no esta carpeta) -- este servicio importa
+# codigo compartido de Backend/common/ y contracts/, que viven fuera de
+# Backend/registro/. Por eso el build real es:
+#
+#   gcloud builds submit --config=... (ver Infrastructure/run.tf)
+#   docker build -f Backend/registro/Dockerfile .    (equivalente local)
+#
+# La estructura de carpetas DENTRO de la imagen replica exactamente la del
+# repo (contracts/, Backend/common/, Backend/registro/) a proposito: asi el
+# sys.path.insert relativo que hace main.py (parents[2] para la raiz,
+# ../common para lo compartido) funciona sin ningun caso especial para la nube.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY Backend/registro/requirements.txt Backend/registro/requirements.txt
+RUN pip install --no-cache-dir -r Backend/registro/requirements.txt
+
+COPY contracts/ contracts/
+COPY Backend/common/ Backend/common/
+COPY Backend/registro/main.py Backend/registro/main.py
+
+WORKDIR /app/Backend/registro
+
+# Cloud Run inyecta PORT; `python -m uvicorn` (no el binario `uvicorn` a
+# secas) agrega el directorio actual a sys.path, igual que en las pruebas
+# locales de esta misma sesion.
+CMD ["sh", "-c", "python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+
+===== Backend\registro\requirements.txt =====
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+pydantic>=2.6,<3
+psycopg2-binary>=2.9,<3
+pg8000>=1.31,<2
+cloud-sql-python-connector>=1.12,<2
+google-cloud-pubsub>=2.21,<3
+google-cloud-secret-manager>=2.20,<3
+
+===== Backend\generador\requirements.txt =====
+pandas>=2.2,<3
+requests>=2.32,<3
+pydantic>=2.6,<3
+google-auth>=2.30,<3
+google-cloud-secret-manager>=2.20,<3
+
+===== Infrastructure\construir_imagen.sh =====
+#!/usr/bin/env bash
+# ============================================================================
+# construir_imagen.sh â€” construye y publica la imagen de un servicio
+# ============================================================================
+#
+# Por que existe: `gcloud builds submit --tag=IMAGEN` exige un Dockerfile en
+# la RAIZ del directorio que se sube como fuente. Nuestros servicios (
+# registro/cierre/stub_veredicto) necesitan la raiz del repo como build
+# context -- importan codigo compartido de Backend/common/ y contracts/,
+# que viven fuera de su propia carpeta -- pero su Dockerfile vive en una
+# subcarpeta (Backend/<servicio>/Dockerfile). La unica forma de combinar
+# "contexto = raiz del repo" con "Dockerfile en otra ruta" es un
+# cloudbuild.yaml explicito con el paso de `docker build -f <ruta>`.
+#
+# Lo invoca Terraform (run.tf) via null_resource + local-exec, una vez por
+# servicio.
+#
+# Uso: construir_imagen.sh <servicio> <dockerfile_relativo_a_la_raiz> <imagen>
+set -euo pipefail
+
+SERVICIO="$1"
+DOCKERFILE="$2"
+IMAGEN="$3"
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TMP_CONFIG="$(mktemp)"
+trap 'rm -f "${TMP_CONFIG}"' EXIT
+
+cat > "${TMP_CONFIG}" <<EOF
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', '${IMAGEN}', '-f', '${DOCKERFILE}', '.']
+images: ['${IMAGEN}']
+EOF
+
+echo "[construir_imagen] ${SERVICIO}: gcloud builds submit (contexto=raiz del repo, dockerfile=${DOCKERFILE})"
+gcloud builds submit "${REPO_ROOT}" --config="${TMP_CONFIG}"
+
+===== Backend\common y contracts =====
+C:\dev\neobanx-fraud-detection\Backend\common\__pycache__
+C:\dev\neobanx-fraud-detection\Backend\common\db_conexion.py
+C:\dev\neobanx-fraud-detection\Backend\common\hmac_util.py
+C:\dev\neobanx-fraud-detection\Backend\common\holidays.py
+C:\dev\neobanx-fraud-detection\Backend\common\requirements.txt
+C:\dev\neobanx-fraud-detection\contracts\__pycache__
+C:\dev\neobanx-fraud-detection\contracts\requirements.txt
+C:\dev\neobanx-fraud-detection\contracts\transaccion.py
+C:\dev\neobanx-fraud-detection\contracts\veredicto.py
+C:\dev\neobanx-fraud-detection\contracts\__init__.py
